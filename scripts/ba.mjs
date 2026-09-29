@@ -315,7 +315,7 @@ async function cmdMedia({ pos, flags }) {
   const chat = await resolveChat(pos[0], state);
   const id = await resolveMessage(chat, pos[1]);
   const msg = await runBeeper(['messages', 'show', '--chat', chat.id, '--id', id]);
-  if (!msg || msg.id !== id || (msg.chatID && msg.chatID !== chat.id)) throw new BeeperError(`Beeper returned a different message than the one asked for. Stopped. Asked ${id}, got ${msg && msg.id}.`);
+  if (!msg || String(msg.id) !== String(id) || (msg.chatID && String(msg.chatID) !== String(chat.id))) throw new BeeperError(`Beeper returned a different message than the one asked for. Stopped. Asked ${id}, got ${msg && msg.id}.`);
   const atts = Array.isArray(msg.attachments) ? msg.attachments : [];
   if (!atts.length) { console.log(`Message ${messageAlias(id)} has no attachments.`); return; }
   // One at a time. Each download is a single request, and a failure is reported, never retried.

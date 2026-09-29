@@ -8,7 +8,8 @@ import { test } from 'node:test';
 import { HistoryError, appleDate, aroundInBeeper, aroundInMessages, textFromAttributedBody } from '../scripts/lib/history.mjs';
 import { renderChat } from '../scripts/lib/render.mjs';
 import { messageAlias } from '../scripts/lib/state.mjs';
-import { NOW, chat } from './fixtures.mjs';
+import { buildIndex } from '../scripts/lib/contacts.mjs';
+import { CONTACT_ROWS, NOW, chat } from './fixtures.mjs';
 
 const dir = mkdtempSync(join(tmpdir(), 'ba-history-'));
 const makeDB = (name, sql) => { const f = join(dir, name); execFileSync('/usr/bin/sqlite3', [f], { input: sql }); return f; };
@@ -124,4 +125,8 @@ test('reactions name who reacted, and iMessage words become emoji', () => {
   const ann = c.participants.items[0].id;
   const msgs = [{ id: '$1', isSender: true, text: 'see you there', timestamp: new Date(NOW - 3_600_000).toISOString(), reactions: [{ reactionKey: 'love', participantID: ann }, { reactionKey: '👍', isSender: true }] }];
   assert.match(renderChat(c, msgs, { now: NOW }), /\[reactions ❤️ Ann · 👍 me\]  «see you there»/);
+  // A tapback read from the Messages database carries only the sender's number.
+  const tap = [{ ...msgs[0], reactions: [{ reactionKey: '😂', participantName: '+15550100001', isSender: false }] }];
+  assert.match(renderChat(c, tap, { now: NOW, contacts: buildIndex(CONTACT_ROWS) }), /\[reactions 😂 Ada Lovelace\]/);
+  assert.match(renderChat(c, tap, { now: NOW }), /\[reactions 😂 \+15550100001\]/, 'a number with no contact still shows');
 });

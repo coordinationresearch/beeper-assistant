@@ -101,7 +101,8 @@ function reactionNote(m, chat = null, contacts = null) {
     if (!byKey.has(k)) byKey.set(k, { n: 0, who: new Set() });
     const e = byKey.get(k);
     e.n++;
-    if (x.participantID || x.isSender) {
+    // Beeper names reactors by id. The Messages database gives a phone number or email instead.
+    if (x.participantID || x.participantName || x.isSender) {
       const who = senderLabel({ isSender: x.isSender === true, senderName: x.participantName || '', senderID: x.participantID }, chat, contacts);
       if (who && who !== 'someone') e.who.add(who);
     }
