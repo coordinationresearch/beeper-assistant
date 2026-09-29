@@ -111,7 +111,7 @@ Read-only is a good way to try it for the first time. Your agent can switch it o
 
 Point a scheduler at your agent and ask it to follow `references/unattended.md`. Each run drafts replies for a few people you have written to before, puts them straight into Beeper, and stays silent unless something is urgent. A scheduled run can never send.
 
-These drafts are starting points. The run drafts whenever a reply is owed, even when it has to guess. Anything it does not know sits in double square brackets, like `[[which day?]]`, so you can spot it before you send.
+These drafts are starting points. The run drafts whenever a reply is owed, even when it has to guess. Where it does not know something it leaves a single underscore, as in `I land _ and could do dinner`, so the blank is quick to find and replace.
 
 Drafts show up in Beeper on your other devices, on every app except iMessage. iMessage drafts stay on the Mac that saved them.
 

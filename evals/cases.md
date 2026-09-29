@@ -81,7 +81,7 @@ Keep the record of your runs outside this folder. It will hold details of a real
 - It runs check, tidy, and pending, in that order.
 - Every chat in the batch ends with a draft or a skip.
 - Every chat that is owed a reply ends with a draft, including the ones that needed a guess.
-- Every gap and every guessed fact is inside double square brackets.
+- Every gap and every guessed fact is a single underscore. The draft holds no brackets, notes, or alternatives.
 - Skips are only for chats that are owed nothing.
 - It tries nothing that drafts-only mode blocks.
 - With nothing urgent, its whole report is the silence marker.

@@ -98,13 +98,14 @@ test('the mode command tightens and never loosens', () => {
 test('the rules for scheduled runs tell the agent to draft with marked gaps, never to skip for a missing fact', () => {
   const rules = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'references', 'unattended.md'), 'utf8');
   assert.match(rules, /Draft whenever a reply is owed/);
-  assert.match(rules, /double square brackets/);
+  assert.match(rules, /single underscore/);
+  assert.equal(/double square brackets/.test(rules), false);
   assert.equal(/skip with the reason/.test(rules), false);
   assert.equal(/Send-ready or nothing/.test(rules), false);
 });
 
 test('text that still holds a marked gap is never sent', () => {
-  const r = run('send', 'c00000000', '--text', 'see you [[which day?]]', '--after', 'none', '--confirmed');
+  const r = run('send', 'c00000000', '--text', 'see you _ at the usual place', '--after', 'none', '--confirmed');
   // The chat reference is checked first, against a Beeper that does not exist here.
   assert.notEqual(r.status, 0);
 });

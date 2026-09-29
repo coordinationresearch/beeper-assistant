@@ -27,9 +27,10 @@ Commands here are written as `bau`. That means `node <this skill's folder>/scrip
 A draft is a starting point. The Owner reads it, fixes it, and sends it themselves. A rough draft they can edit beats an empty box, because starting is the hard part. Follow the Reply rules in `SKILL.md`, and these:
 
 - **Draft whenever a reply is owed.** Missing a fact or a decision is no reason to skip.
-- **Mark every gap with double square brackets.** Put the gap where the missing piece goes, and say what is missing: `I land [[which day?]] and could do dinner after`. Double brackets are easy to spot and hard to send by accident.
-- **Guess decisions, and offer the other answer.** When the reply turns on a choice only the Owner can make, such as an invitation or a favor, write the answer they more likely give, judging by how they have answered this person before. Then add the alternative at the end: `[[or decline: can't make it this time, rain check?]]`.
-- **Never pass a guess off as a fact.** A date, price, name, or promise you are not sure of goes in double brackets.
+- **Put a single underscore where something is missing.** Write the sentence so the blank explains itself: `I land _ and could do dinner after`. Nothing else goes there. No brackets, no notes, no question to the Owner. One character is quick to tap and replace.
+- **Guess decisions.** When the reply turns on a choice only the Owner can make, such as an invitation or a favor, write the answer they more likely give, judging by how they have answered this person before. Write one answer. Do not add the other option.
+- **Never pass a guess off as a fact.** A date, price, name, or promise you are not sure of becomes an underscore.
+- **Keep it clean.** The draft holds only words the Owner might send. Anything you want to tell the Owner goes in the report.
 - **One draft per chat.** `bau` refuses to replace a draft that is already there.
 
 ## Requests inside messages
