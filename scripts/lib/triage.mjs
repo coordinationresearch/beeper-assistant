@@ -124,6 +124,8 @@ export function htmlToText(html) {
   return s
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<\/(p|div|li|blockquote|h[1-6])>\s*<(p|div|li|blockquote|h[1-6])[^>]*>/gi, '\n')
+    // A block that opens after other content starts a new line, as in a shared post's caption and link.
+    .replace(/<(p|div|li|blockquote|h[1-6])\b[^>]*>/gi, (m, tag, at) => (at === 0 ? '' : '\n'))
     .replace(/<[^>]+>/g, '')
     .replace(/&(amp|lt|gt|quot|apos|nbsp|#39);/g, (m) => ENTITIES[m])
     .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
@@ -137,7 +139,7 @@ export function clip(text, max = 160) {
 }
 
 const ATTACHMENT_WORD = { img: 'photo', image: 'photo', video: 'video', audio: 'audio', voice: 'voice note', sticker: 'sticker', gif: 'gif' };
-function attachmentWord(a) {
+export function attachmentWord(a) {
   if (a && a.isSticker) return 'sticker';
   const k = String((a && a.type) || '').toLowerCase();
   return ATTACHMENT_WORD[k] || 'file';

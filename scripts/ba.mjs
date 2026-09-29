@@ -3,13 +3,14 @@
 // Reads are compact. Writes take exact chat references only and verify by reading back.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { BeeperError, apiOnce, asList, listChats, listChatsSince, listMessages, listMessagesFast, participantsOf, runBeeper, searchChats, showChat } from './lib/beeper.mjs';
+import { BeeperError, SEARCH_MEDIA, apiOnce, asList, attachmentFile, listChats, listChatsSince, listMessages, listMessagesFast, participantsOf, runBeeper, searchChats, searchMessages, showChat } from './lib/beeper.mjs';
 import { loadContacts, looksLikeEmail, looksLikePhone, normalizeEmail, normalizePhone, ownersOf, resetContacts, searchPeople } from './lib/contacts.mjs';
 import { addContact } from './lib/contacts-write.mjs';
-import { UNTRUSTED_NOTE, age, quote, renderChat, renderPending, renderTriage } from './lib/render.mjs';
-import { appendOutbox, chatAlias, dismiss, dropFromOutbox, isChatAlias, isMessageAlias, loadState, messageAlias, pruneDismissed, readOutbox, recordDraft, recordSkip, rememberChats, saveState, stateDir, undismiss } from './lib/state.mjs';
+import { HistoryError, historyStatus, messagesAround } from './lib/history.mjs';
+import { UNTRUSTED_NOTE, age, mediaKind, quote, renderChat, renderMedia, renderPending, renderSearch, renderTriage } from './lib/render.mjs';
+import { appendOutbox, chatAlias, dismiss, dropFromOutbox, isChatAlias, isMessageAlias, loadState, messageAlias, pruneDismissed, readOutbox, recordDraft, recordSkip, copyMedia, pruneMedia, rememberChats, rememberMessages, saveState, savedMessage, stateDir, undismiss } from './lib/state.mjs';
 import { matchChat, outboxEntry, selectPending, stillCurrent, tidyDecision } from './lib/unattended.mjs';
-import { DEFAULT_WINDOW_DAYS, applyContext, buildTriage, chatName, clip, counterparties, draftText, finalizeTriage, handlesOf, htmlToText, isGroup, wantsHistory } from './lib/triage.mjs';
+import { DEFAULT_WINDOW_DAYS, applyContext, buildTriage, chatName, clip, counterparties, draftText, finalizeTriage, handlesOf, htmlToText, isGroup, previewKind, wantsHistory } from './lib/triage.mjs';
 
 const DAY = 86_400_000;
 const BOOL = new Set(['json', 'confirmed', 'replace', 'for-everyone', 'dismiss-on-message', 'help', 'all', 'dry-run']);
@@ -84,8 +85,11 @@ async function resolveMessage(chat, ref) {
   if (!isMessageAlias(ref)) return ref; // assume an exact message ID
   const msgs = await listMessages(chat.id, { limit: 100 });
   const hit = msgs.filter((m) => messageAlias(m.id) === ref);
-  if (hit.length !== 1) throw new UsageError(`No message matches ${ref} in the last 100 messages of this chat.`);
-  return hit[0].id;
+  if (hit.length === 1) return hit[0].id;
+  // An older message found by search, remembered with the chat it belongs to.
+  const saved = savedMessage(loadState(), chat.id, ref);
+  if (saved) return saved;
+  throw new UsageError(`No message matches ${ref} in this chat. Get references from the chat or search command.`);
 }
 
 const label = (chat, contacts) => `${chatName(chat, contacts).name} · ${chat.network}${isGroup(chat) ? ' · group' : ''}`;
@@ -127,6 +131,7 @@ async function cmdCheck() {
   const c = await loadContacts();
   if (c.available) lines.push(`ok    Contacts readable (${c.people.size} people)`);
   else lines.push('warn  Contacts not readable, so iMessage chats will show phone numbers. The skill works without it.', '      Optional fix: give the app your agent runs in Full Disk Access, in System Settings, Privacy & Security.');
+  for (const h of await historyStatus()) lines.push(h.ok ? `ok    ${h.text}` : `warn  ${h.text}`);
 
   try { saveState(loadState()); lines.push(`ok    State folder ${stateDir()}`); } catch (e) { fail(`Cannot write state in ${stateDir()}: ${e.message}`); }
 
@@ -182,12 +187,31 @@ async function cmdTriage({ flags }) {
 async function cmdChat({ pos, flags }) {
   const state = loadState();
   const chat = await resolveChat(pos[0], state);
-  const [messages, contacts] = await Promise.all([listMessages(chat.id, { limit: Number(flags.limit || 20) }), loadContacts()]);
+  const limit = Number(flags.limit || 20);
+  if (!(limit >= 1 && limit <= 200)) throw new UsageError('--limit must be between 1 and 200');
+  let around = null;
+  let messages;
+  if (flags.around) {
+    around = await resolveMessage(chat, flags.around);
+    // Beeper confirms the message is in this chat. The history files only supply its neighbours.
+    const target = await runBeeper(['messages', 'show', '--chat', chat.id, '--id', around]);
+    if (!target || String(target.id) !== String(around)) throw new BeeperError(`Beeper returned a different message than the one asked for. Stopped. Asked ${around}, got ${target && target.id}.`);
+    const before = Math.floor(limit / 2);
+    try { messages = await messagesAround(chat, around, { before, after: limit - before - 1 }); } catch (e) {
+      if (e instanceof HistoryError) throw new BeeperError(`Could not show older messages. ${e.message}`);
+      throw e;
+    }
+    rememberMessages(state, messages);
+    saveState(state);
+  } else {
+    messages = await listMessages(chat.id, { limit });
+  }
+  const contacts = await loadContacts();
   if (flags.json) {
-    console.log(JSON.stringify({ chat: { ref: chatAlias(chat.id), id: chat.id, name: chatName(chat, contacts).name, network: chat.network, type: chat.type, unreadCount: chat.unreadCount, draft: chat.draft, reminder: chat.reminder }, messages: messages.map((m) => ({ ref: messageAlias(m.id), id: m.id, from: m.isSender ? 'me' : 'them', sender: m.senderName, at: m.timestamp, text: htmlToText(m.text).replace(/\{\{\s*sender\s*\}\}/g, m.isSender ? 'I' : (m.senderName || 'They')), hidden: m.isHidden === true, replyTo: m.linkedMessageID || null })) }, null, 1));
+    console.log(JSON.stringify({ chat: { ref: chatAlias(chat.id), id: chat.id, name: chatName(chat, contacts).name, network: chat.network, type: chat.type, unreadCount: chat.unreadCount, draft: chat.draft, reminder: chat.reminder }, around: around ? messageAlias(around) : undefined, messages: messages.map((m) => ({ ref: messageAlias(m.id), id: m.id, from: m.isSender ? 'me' : 'them', sender: m.senderName, at: m.timestamp, text: htmlToText(m.text).replace(/\{\{\s*sender\s*\}\}/g, m.isSender ? 'I' : (m.senderName || 'They')), hidden: m.isHidden === true, replyTo: m.linkedMessageID || null })) }, null, 1));
     return;
   }
-  console.log(renderChat(chat, messages, { contacts }));
+  console.log(renderChat(chat, messages, { contacts, around }));
 }
 
 function matchesTokens(text, tokens) {
@@ -245,9 +269,73 @@ async function cmdFind({ pos, flags }) {
   else if (!contacts.available) out.push('Contacts could not be read, so matching used chat titles only.');
   for (const r of rows.slice(0, 40)) out.push(`${r.ref}  ${r.name} · ${r.network} · ${r.type} · last ${age(now - (Date.parse(r.lastActivity) || 0))} ago · matched by ${r.matchedBy}`);
   if (!rows.length) out.push('No chat found. The person may have no chat yet, or their chat is older than the last 800.');
-  if (people.length > 1 || new Set(rows.map((r) => r.name)).size > 1) out.push('More than one person matches. Ask the Owner which one. Never pick for them.');
-  out.push('Groups a person only belongs to are hidden. Add --all to include them.');
+  // Groups carry their own names, so only one-to-one chats say whether several people match.
+  if (people.length > 1 || new Set(rows.filter((r) => r.type === 'single').map((r) => r.name)).size > 1) out.push('More than one person matches. Ask the Owner which one. Never pick for them.');
+  if (!flags.all) out.push('Groups a person only belongs to are hidden. Add --all to include them.');
   console.log(out.join('\n'));
+}
+
+async function cmdSearch({ pos, flags }) {
+  const query = pos.join(' ').trim();
+  const media = flags.media ? String(flags.media).toLowerCase().split(',').map((x) => x.trim()).filter(Boolean) : [];
+  for (const m of media) if (!SEARCH_MEDIA.includes(m)) throw new UsageError(`--media takes ${SEARCH_MEDIA.join(', ')}. Join several with commas.`);
+  const from = flags.from ? String(flags.from).toLowerCase() : null;
+  if (from && from !== 'me' && from !== 'them') throw new UsageError('--from takes me or them');
+  const days = flags.days === undefined ? 0 : Number(flags.days);
+  if (flags.days !== undefined && !(days > 0)) throw new UsageError('--days must be a positive number');
+  const max = flags.max === undefined ? 20 : Number(flags.max);
+  if (!(max >= 1 && max <= 100)) throw new UsageError('--max must be between 1 and 100');
+  if (!query && !media.length) throw new UsageError('Usage: search <words> [--chat <chat>] [--from me|them] [--media image,video,file,link,any] [--days N] [--max 20]. Give words, or --media.');
+
+  const state = loadState();
+  const chat = flags.chat ? await resolveChat(flags.chat, state) : null;
+  const sinceMs = days ? Date.now() - days * DAY : 0;
+  const found = await searchMessages({ query, chatID: chat && chat.id, sender: from === 'them' ? 'others' : from, media }, { max, sinceMs, keep: (m) => !m.isHidden && previewKind(m) !== 'reaction' });
+  rememberChats(state, Object.values(found.chats));
+  rememberMessages(state, found.items);
+  saveState(state);
+  const contacts = await loadContacts();
+
+  if (flags.json) {
+    const byChat = new Map();
+    for (const m of found.items) {
+      const c = found.chats[m.chatID] || { id: m.chatID };
+      if (!byChat.has(m.chatID)) byChat.set(m.chatID, { ref: chatAlias(m.chatID), id: m.chatID, name: chatName(c, contacts).name, network: c.network || null, type: c.type || null, messages: [] });
+      byChat.get(m.chatID).messages.push({ ref: messageAlias(m.id), id: m.id, from: m.isSender ? 'me' : 'them', sender: m.senderName, at: m.timestamp, text: htmlToText(m.text), attachments: (m.attachments || []).map(mediaKind) });
+    }
+    console.log(JSON.stringify({ query, more: found.more, chats: [...byChat.values()] }, null, 1));
+    return;
+  }
+  const filters = [chat && `in ${label(chat, contacts)}`, from && `from ${from}`, media.length && `with ${media.join(' or ')}`, days && `last ${days} days`].filter(Boolean);
+  console.log(renderSearch({ query, ...found }, { contacts, filters, max }));
+}
+
+async function cmdMedia({ pos, flags }) {
+  const state = loadState();
+  const chat = await resolveChat(pos[0], state);
+  const id = await resolveMessage(chat, pos[1]);
+  const msg = await runBeeper(['messages', 'show', '--chat', chat.id, '--id', id]);
+  if (!msg || msg.id !== id || (msg.chatID && msg.chatID !== chat.id)) throw new BeeperError(`Beeper returned a different message than the one asked for. Stopped. Asked ${id}, got ${msg && msg.id}.`);
+  const atts = Array.isArray(msg.attachments) ? msg.attachments : [];
+  if (!atts.length) { console.log(`Message ${messageAlias(id)} has no attachments.`); return; }
+  // One at a time. Each download is a single request, and a failure is reported, never retried.
+  pruneMedia();
+  const files = [];
+  for (const [i, a] of atts.entries()) {
+    const got = await attachmentFile(a);
+    // Video and audio stay where Beeper keeps them. Nothing here can watch or hear them.
+    if (got.path && !['video', 'audio', 'voice note'].includes(mediaKind(a))) {
+      try { got.path = copyMedia(got.path, a, `${messageAlias(id)}-${i + 1}`); } catch (e) { got.note = `could not copy it out of Beeper (${e.message}), so this is Beeper's own copy`; }
+    }
+    files.push({ attachment: a, ...got });
+  }
+  const contacts = await loadContacts();
+  if (flags.json) {
+    console.log(JSON.stringify({ chat: chatAlias(chat.id), message: messageAlias(id), files: files.map((f) => ({ kind: mediaKind(f.attachment), fileName: f.attachment.fileName || null, mimeType: f.attachment.mimeType || null, bytes: f.attachment.fileSize || null, transcript: (f.attachment.transcription && f.attachment.transcription.transcription) || null, path: f.path || null, error: f.error || null })) }, null, 1));
+    return;
+  }
+  console.log(renderMedia(chat, msg, files, { contacts }));
+  if (files.every((f) => !f.path)) process.exitCode = 1;
 }
 
 async function cmdDismiss({ pos }) {
@@ -665,7 +753,11 @@ Read
   mode [readonly | drafts]            show the mode, or make it stricter
   triage [--days 14] [--max 100]      chats that want the Owner's attention. Add --all to keep automated senders
   chat <chat> [--limit 20]            recent messages in one chat
+  chat <chat> --around <message>      older messages around one, such as a search hit
   find <name | number | email>        every chat for a person. Add --all for groups they are in
+  search <words> [--chat <chat>] [--from me|them] [--media image] [--days N] [--max 20]
+                                      messages that contain these words, across all chats
+  media <chat> <message>              put a message's photos and files on this Mac, and print where
 
 Triage state
   dismiss <chat>                      hide from triage until a new message arrives
@@ -696,7 +788,7 @@ Write, needs --confirmed after the Owner says yes
 
 <chat> is a reference like c1a2b3c4d from triage or find, or an exact Beeper chat ID.
 <message> is a reference like m1a2b3c4d from the chat command.
-Names and titles are never accepted as <chat>. Add --json to read commands for structured output.
+Names and titles are never accepted as <chat>. Add --json to triage, chat, find, search, media, and pending.
 --text - reads the message from stdin.
 Set BEEPER_ASSISTANT_MODE=drafts to allow reading and drafts only, or readonly to allow reading only.
 A file named mode in the state folder does the same, and the stricter of the two wins.`;
@@ -707,8 +799,8 @@ A file named mode in the state folder does the same, and the stricter of the two
 //   drafts    for runs with no person in the turn: read, and save drafts. Nothing anyone else can see
 //   readonly  read only
 const ALLOWED = {
-  readonly: new Set(['check', 'mode', 'triage', 'chat', 'find', 'pending', 'outbox', 'dismiss', 'undismiss']),
-  drafts: new Set(['check', 'mode', 'triage', 'chat', 'find', 'pending', 'outbox', 'draft', 'skip', 'tidy', 'place']),
+  readonly: new Set(['check', 'mode', 'triage', 'chat', 'find', 'search', 'media', 'pending', 'outbox', 'dismiss', 'undismiss']),
+  drafts: new Set(['check', 'mode', 'triage', 'chat', 'find', 'search', 'media', 'pending', 'outbox', 'draft', 'skip', 'tidy', 'place']),
 };
 const RANK = { readonly: 0, drafts: 1, full: 2 };
 function modeFromEnv() {
@@ -733,7 +825,7 @@ function currentMode() {
   return RANK[e] <= RANK[f] ? e : f;
 }
 
-const COMMANDS = { check: cmdCheck, triage: cmdTriage, chat: cmdChat, find: cmdFind, dismiss: cmdDismiss, undismiss: cmdUndismiss, draft: cmdDraft, send: cmdSend, read: cmdRead, react: cmdReact, remind: cmdRemind, unremind: cmdUnremind, edit: cmdEdit, delete: cmdDelete, group: cmdGroup, start: cmdStart, contact: cmdContact, pending: cmdPending, skip: cmdSkip, tidy: cmdTidy, outbox: cmdOutbox, place: cmdPlace, mode: cmdMode };
+const COMMANDS = { check: cmdCheck, triage: cmdTriage, chat: cmdChat, find: cmdFind, search: cmdSearch, media: cmdMedia, dismiss: cmdDismiss, undismiss: cmdUndismiss, draft: cmdDraft, send: cmdSend, read: cmdRead, react: cmdReact, remind: cmdRemind, unremind: cmdUnremind, edit: cmdEdit, delete: cmdDelete, group: cmdGroup, start: cmdStart, contact: cmdContact, pending: cmdPending, skip: cmdSkip, tidy: cmdTidy, outbox: cmdOutbox, place: cmdPlace, mode: cmdMode };
 
 async function main() {
   const [name, ...rest] = process.argv.slice(2);

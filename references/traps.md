@@ -12,6 +12,7 @@ Ways Beeper misreports or surprises, grouped by what you see. Each entry says wh
 - Groups
 - Delete, edit, react
 - Search
+- Photos and files
 - Setup and docs
 
 ## A write reported an error
@@ -76,13 +77,25 @@ Ways Beeper misreports or surprises, grouped by what you see. Each entry says wh
 
 ## Search
 
-- **Message search matches words, not meaning.** Try two or three likely keywords.
+- **Message search matches letters, not meaning.** It also finds them inside longer words: `ave` matched "have", `unit` matched "community". Seen. Use distinctive words, and try two or three.
+- **Search results across chats are not in date order.** A page is several date-ordered runs joined together. Seen. `ba search` sorts by time and keeps paging past an old result.
+- **`sender=others` returns the Owner's messages too.** `sender=me` works. Seen. `ba search --from them` filters again on its own.
 - **The search parameter is `query`.** An unknown parameter such as `q` is ignored and recent chats come back, which looks like a wrong answer.
 - **Search is slow right after Beeper starts.** It is still indexing. Recent chats list fine.
-- **Message search refuses a limit above 20.** It answers with a 400 error.
+- **Message search refuses a limit above 20.** It answers with a 400 error. `ba search` asks for 20 at a time and pages.
 - **Archived chats are missing from the default list.** `ba find` can miss a person whose only chat is archived. Check with `beeper chats list --archived --read-only`.
-- **Paging can repeat.** The CLI's `--before-cursor` has returned the same page twice. Stop when a page brings nothing new.
+- **Search ignores its own date filters.** `dateBefore` and `dateAfter` change nothing. Seen. `ba search --days` applies the limit itself.
+- **Tapbacks match the words they quote.** A reaction reads `Loved "…"` with the whole original inside, so it turns up next to the real message. `ba search` leaves them out.
+- **Beeper's paging cannot reach the messages around an old one.** Seen on 2026-09-29. The CLI's `--before-cursor`, `--after-cursor`, and `messages context` pass a message id where the API wants a sort key, so they return the wrong messages on every network (beeper/cli#39). The API's `direction=after` returns the newest page of the chat instead of the next one (beeper/desktop-api-openapi#4). iMessage cursors fail in both directions (beeper/desktop-api-openapi#3). Outside iMessage, the API's `direction=before` with the `oldestCursor` it returned does work. `ba chat --around` reads the files on the Mac instead. When paging anything, stop when a page brings nothing new.
+- **Older history comes from files Beeper does not document.** `ba chat --around` reads Beeper's `index.db` for every network except iMessage, and Apple's Messages database for iMessage, both read-only. A Beeper or macOS update can change their layout. `ba check` tests both, and `--around` stops with a reason rather than guess.
+- **iMessage history needs Full Disk Access,** the same permission Contacts needs. Without it `--around` works for the other networks only.
 - **History can be partial.** Chats joined recently may hold only recent messages. "Nothing found" does not prove nothing was said.
+
+## Photos and files
+
+- **A failed download still answers 200.** The reason is in an `error` field of the reply. Seen. `ba media` reports it.
+- **Media expires on the network.** WhatsApp answered "Media is no longer available on WhatsApp servers and must be re-requested from your phone", and Instagram said a story or reel "must be refetched". Seen. Only the Owner's phone can get these back.
+- **Beeper's own copies have no file extension,** and the path has a space in it. `ba media` copies photos and documents into the state folder under a name with an extension, and deletes the copies after two days. Video and audio stay where Beeper keeps them.
 
 ## Setup and docs
 

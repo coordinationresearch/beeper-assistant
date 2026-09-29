@@ -69,6 +69,8 @@ It needs git, Homebrew, and Node 18 or newer. The installer's check names anythi
 |---|---|
 | "what needs my reply?" | Lists who is waiting on you, including chats you read and never answered |
 | "find my chats with Sam" | Shows every chat with that person, on every app |
+| "what was the address Sam sent me?" | Searches your messages for the words and shows the matches |
+| "what's in the photo Sam sent?" | Opens the photo or file so your agent can look at it |
 | "draft a reply to Sam" | Reads the chat and saves a draft in Beeper's compose box |
 | "send it" | Shows you the exact text and chat, waits for your yes, then sends once |
 | "who is this number?" | Reads the chat, offers a guess, and adds a contact when you agree |
@@ -80,8 +82,8 @@ It can also react, edit, unsend, set reminders, and start groups.
 
 - **It runs on your Mac.** There is no server and no account, and it collects nothing.
 - **Your agent reads the messages it works with.** That text goes to whichever AI model your agent uses, the same as anything else you show your agent. If you would not paste a chat into your agent, do not ask the skill about it.
-- **How much it reads.** "What needs my reply?" gives your agent one line per waiting chat: the name, the app, and the last message or few. On a busy account that is a few pages of text. Opening one chat gives it the last 20 messages of that chat.
-- **It keeps one small file,** at `~/.config/beeper-assistant/state.json`. It holds chat ids: a lookup table for the short references the skill uses, and the chats you dismissed or had drafted. It stores no names and no message text.
+- **How much it reads.** "What needs my reply?" gives your agent one line per waiting chat: the name, the app, and the last message or few. On a busy account that is a few pages of text. Opening one chat gives it the last 20 messages of that chat. A search gives it up to 20 matching messages, and reading around one gives it 20 more. For that, it reads Beeper's history file and, for iMessage, the Mac's Messages database, both read-only. Opening a photo or file sends that file to the model.
+- **It keeps a small folder,** at `~/.config/beeper-assistant/`. `state.json` holds chat and message ids: a lookup table for the short references the skill uses, and the chats you dismissed or had drafted. It stores no names and no message text. Photos and files your agent opens are copied into `media/` there and deleted after two days. Scheduled runs on an iMessage account queue draft text in `outbox.jsonl` for two days.
 - **Messages from other people are treated as untrusted.** The skill marks them and tells your agent to never follow instructions inside them. That lowers the risk of a message tricking your agent. It does not remove it.
 - **Beeper is a separate product,** with its own account, pricing, and privacy terms. The skill only sees chats you have connected to Beeper.
 

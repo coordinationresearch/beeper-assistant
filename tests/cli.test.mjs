@@ -14,7 +14,7 @@ const run = (...args) => spawnSync(process.execPath, [BA, ...args], { env, encod
 
 test('help lists every command', () => {
   const out = execFileSync(process.execPath, [BA, 'help'], { env, encoding: 'utf8' });
-  for (const c of ['check', 'mode', 'triage', 'chat', 'find', 'dismiss', 'undismiss', 'draft', 'read', 'remind', 'unremind', 'send', 'react', 'edit', 'delete', 'group', 'start', 'contact']) {
+  for (const c of ['check', 'mode', 'triage', 'chat', 'find', 'search', 'media', 'dismiss', 'undismiss', 'draft', 'read', 'remind', 'unremind', 'send', 'react', 'edit', 'delete', 'group', 'start', 'contact']) {
     assert.match(out, new RegExp(`^  ${c}\\b`, 'm'), c);
   }
 });
@@ -26,7 +26,7 @@ test('an unknown command is a usage error', () => {
 });
 
 test('a name is never accepted where a chat reference is needed', () => {
-  for (const cmd of ['chat', 'send', 'draft', 'read', 'dismiss', 'delete', 'react', 'edit', 'contact']) {
+  for (const cmd of ['chat', 'send', 'draft', 'read', 'dismiss', 'delete', 'react', 'edit', 'contact', 'media']) {
     const r = run(cmd, 'Ann', '--text', 'hi', '--first', 'A', '--confirmed');
     assert.equal(r.status, 2, cmd);
     assert.match(r.stderr, /not an exact reference/, cmd);
@@ -37,6 +37,15 @@ test('a missing Beeper CLI gives the install command', () => {
   const r = run('triage');
   assert.equal(r.status, 1);
   assert.match(r.stderr, /brew install beeper\/tap\/cli/);
+});
+
+test('search checks its input before it reaches Beeper', () => {
+  assert.match(run('search').stderr, /Give words, or --media/);
+  assert.match(run('search', 'x', '--media', 'photos').stderr, /--media takes any, image, video, file, link/);
+  assert.match(run('search', 'x', '--from', 'ann').stderr, /--from takes me or them/);
+  assert.match(run('search', 'x', '--max', '500').stderr, /--max must be between 1 and 100/);
+  assert.match(run('search', 'x', '--chat', 'Ann').stderr, /not an exact reference/);
+  for (const r of [run('search'), run('search', 'x', '--days', '0')]) assert.equal(r.status, 2);
 });
 
 test('group needs at least two source chats', () => {
@@ -57,8 +66,10 @@ test('read-only mode blocks every command that writes', () => {
     assert.match(r.stderr, /Read-only mode is on/, cmd);
   }
   // Reads still get as far as looking for Beeper.
-  const r = spawnSync(process.execPath, [BA, 'triage'], { env: ro, encoding: 'utf8' });
-  assert.match(r.stderr, /brew install/);
+  for (const args of [['triage'], ['search', 'dinner'], ['media', 'c00000000', 'm00000000']]) {
+    const r = spawnSync(process.execPath, [BA, ...args], { env: ro, encoding: 'utf8' });
+    assert.match(r.stderr, /brew install/, args[0]);
+  }
 });
 
 test('check names each missing piece and its fix', () => {

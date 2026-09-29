@@ -177,6 +177,8 @@ test('drafts come back from Beeper as HTML and are read as plain text', () => {
   assert.equal(htmlToText('<p>line one</p><p>line two</p>'), 'line one\nline two');
   assert.equal(htmlToText('one<br>two<br/>three'), 'one\ntwo\nthree');
   assert.equal(htmlToText('it&#39;s fine &#128077;'), "it's fine \u{1F44D}");
+  // A shared post: caption in bold, then the link in its own paragraph.
+  assert.equal(htmlToText('<strong>summer</strong><p><a href="https://example.com/p/1">https://example.com/p/1</a></p>'), 'summer\nhttps://example.com/p/1');
   assert.equal(htmlToText('plain text, 2 < 3'), 'plain text, 2 < 3');
   assert.equal(draftText({ draft: { text: '<p>hi</p>' } }), 'hi');
   assert.equal(draftText({ draft: null }), '');

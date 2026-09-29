@@ -136,6 +136,8 @@ test('drafts-only mode blocks everything another person could see, and mark as r
 
 test('drafts-only mode lets reads and drafts through to Beeper', () => {
   for (const cmd of ['triage', 'pending']) assert.match(run({ BEEPER_ASSISTANT_MODE: 'drafts' }, cmd).stderr, /brew install/, cmd);
+  assert.match(run({ BEEPER_ASSISTANT_MODE: 'drafts' }, 'search', 'dinner').stderr, /brew install/);
+  assert.match(run({ BEEPER_ASSISTANT_MODE: 'drafts' }, 'media', 'c00000000', 'm00000000').stderr, /brew install/);
   const d = run({ BEEPER_ASSISTANT_MODE: 'drafts' }, 'draft', 'Ann', '--text', 'hi', '--for', 'm00000000');
   assert.match(d.stderr, /not an exact reference/);
 });
