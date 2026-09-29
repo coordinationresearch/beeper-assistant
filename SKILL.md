@@ -86,7 +86,7 @@ Write a reply only when the Owner asks for one. A triage list is a list, and dra
 2. Write the reply:
    - Match how the Owner writes in this chat: length, capitals, punctuation, emoji. Texts and DMs get no greeting and no sign-off unless the Owner uses them there.
    - Answer what was asked. Keep it as short as their messages.
-   - Use only facts from the chat or from the Owner. A name, date, price, or promise that is in neither place does not exist. Ask the Owner.
+   - Use only facts from the chat or from the Owner. A name, date, price, or promise that is in neither place does not exist. Ask the Owner, or when saving a draft for later, mark the gap in double square brackets: `[[which day?]]`. `ba send` refuses text that still holds one.
    - Say "sorry for the slow reply" only when the dates in the chat show it was slow.
    - Leave out anything the Owner told you that the other person should not read.
 3. Save it with `ba draft <chat> --text "…"`. Tell the Owner it is waiting in Beeper. They can edit and send it there.

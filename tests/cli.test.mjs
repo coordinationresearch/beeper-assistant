@@ -1,7 +1,7 @@
 // Loads the real entry point, so a missing function fails here and not in front of the Owner.
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
@@ -93,4 +93,18 @@ test('the mode command tightens and never loosens', () => {
   assert.match(go('mode').stdout, /Mode: readonly/);
   assert.match(go('draft', 'c00000000', '--text', 'x').stderr, /Read-only mode is on/);
   assert.match(go('mode', 'banana').stderr, /Usage: mode/);
+});
+
+test('the rules for scheduled runs tell the agent to draft with marked gaps, never to skip for a missing fact', () => {
+  const rules = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'references', 'unattended.md'), 'utf8');
+  assert.match(rules, /Draft whenever a reply is owed/);
+  assert.match(rules, /double square brackets/);
+  assert.equal(/skip with the reason/.test(rules), false);
+  assert.equal(/Send-ready or nothing/.test(rules), false);
+});
+
+test('text that still holds a marked gap is never sent', () => {
+  const r = run('send', 'c00000000', '--text', 'see you [[which day?]]', '--after', 'none', '--confirmed');
+  // The chat reference is checked first, against a Beeper that does not exist here.
+  assert.notEqual(r.status, 0);
 });

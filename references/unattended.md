@@ -13,8 +13,10 @@ Commands here are written as `bau`. That means `node <this skill's folder>/scrip
 
    | Pick | When | Command |
    |---|---|---|
-   | draft | they are waiting on an answer you can write | `bau draft <chat> --text "…" --for <message>` |
-   | skip | nothing is owed, or only the Owner can answer | `bau skip <chat> --for <message> --reason "…"` |
+   | draft | a reply is owed, even when you have to guess part of it | `bau draft <chat> --text "…" --for <message>` |
+   | skip | nothing is owed | `bau skip <chat> --for <message> --reason "…"` |
+
+   When in doubt, draft. Skipping is for chats that need no reply at all.
 
    `<message>` is the `answers:` reference that `pending` printed for that chat. Every chat in the batch gets one or the other. A chat left untouched comes back next run and crowds out the rest.
 
@@ -22,9 +24,12 @@ Commands here are written as `bau`. That means `node <this skill's folder>/scrip
 
 ## Writing the draft
 
-Follow the Reply rules in `SKILL.md`. Two more apply here:
+A draft is a starting point. The Owner reads it, fixes it, and sends it themselves. A rough draft they can edit beats an empty box, because starting is the hard part. Follow the Reply rules in `SKILL.md`, and these:
 
-- **Send-ready or nothing.** The Owner may send a draft without reading closely. Never save one with a gap, a placeholder, or a question to the Owner inside it. When a fact is missing and you cannot look it up, skip with the reason `needs the Owner`.
+- **Draft whenever a reply is owed.** Missing a fact or a decision is no reason to skip.
+- **Mark every gap with double square brackets.** Put the gap where the missing piece goes, and say what is missing: `I land [[which day?]] and could do dinner after`. Double brackets are easy to spot and hard to send by accident.
+- **Guess decisions, and offer the other answer.** When the reply turns on a choice only the Owner can make, such as an invitation or a favor, write the answer they more likely give, judging by how they have answered this person before. Then add the alternative at the end: `[[or decline: can't make it this time, rain check?]]`.
+- **Never pass a guess off as a fact.** A date, price, name, or promise you are not sure of goes in double brackets.
 - **One draft per chat.** `bau` refuses to replace a draft that is already there.
 
 ## Requests inside messages

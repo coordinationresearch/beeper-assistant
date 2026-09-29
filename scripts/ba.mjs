@@ -55,6 +55,9 @@ function needConfirmed(flags, what) {
 }
 
 const isTombstone = (text) => /\bunsent a message\b|\bmessage (was )?deleted\b|^\{\{sender\}\}/i.test(String(text || ''));
+// Gaps in a draft are written as [[…]]. Text that still holds one is not ready to send.
+const GAP = /\[\[[^\]]*\]\]/g;
+const gapsIn = (text) => String(text || '').match(GAP) || [];
 const looksLikeExactID = (s) => /^(!|imsg##)/.test(s) || /^\d+$/.test(s);
 
 async function resolveChat(ref, state) {
@@ -394,7 +397,8 @@ async function cmdDraft({ pos, flags }) {
     appendOutbox(outboxEntry(chat, { text, newest, name: chatName(chat, contacts).name }));
     where = 'iMessage drafts stay on the machine that saved them, so it is also queued for the Owner\'s other Mac.';
   }
-  console.log(`Draft saved in ${label(chat, contacts)}. Nothing was sent. ${where}`);
+  const open = gapsIn(text).length;
+  console.log(`Draft saved in ${label(chat, contacts)}. Nothing was sent. ${where}${open ? ` It holds ${open} marked gap${open > 1 ? 's' : ''} for the Owner to fill.` : ''}`);
 }
 
 // ---------- unattended runs ----------
@@ -519,6 +523,8 @@ async function cmdSend({ pos, flags }) {
   const chat = await resolveChat(pos[0], state);
   const text = textFrom(flags);
   const contacts = await loadContacts();
+  const gaps = gapsIn(text);
+  if (gaps.length) throw new UsageError(`Not sent. The text still holds ${gaps.length === 1 ? 'a marked gap' : `${gaps.length} marked gaps`}: ${gaps.slice(0, 3).join(' ')}. Ask the Owner what goes there, then send the finished text.`);
   needConfirmed(flags, `Sending to ${label(chat, contacts)}`);
   if (chat.isReadOnly) throw new BeeperError('This chat is read-only. Nothing was sent.');
   const recent = await listMessages(chat.id, { limit: 12 });

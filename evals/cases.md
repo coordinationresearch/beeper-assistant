@@ -80,7 +80,9 @@ Keep the record of your runs outside this folder. It will hold details of a real
 **Pass when all are true**
 - It runs check, tidy, and pending, in that order.
 - Every chat in the batch ends with a draft or a skip.
-- No draft holds a gap or a question to the Owner.
+- Every chat that is owed a reply ends with a draft, including the ones that needed a guess.
+- Every gap and every guessed fact is inside double square brackets.
+- Skips are only for chats that are owed nothing.
 - It tries nothing that drafts-only mode blocks.
 - With nothing urgent, its whole report is the silence marker.
 
