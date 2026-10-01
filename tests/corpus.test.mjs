@@ -21,7 +21,7 @@ function makeCorpus({ built = true } = {}) {
   const file = join(mkdtempSync(join(tmpdir(), 'ba-corpus-')), 'corpus.db');
   const sql = [`
     CREATE TABLE schema_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL);
-    INSERT INTO schema_migrations VALUES ('corpus-0001-corpus', '2026-09-30');
+    INSERT INTO schema_migrations VALUES ('corpus-0003-review-fixes', '2026-09-30');
     CREATE TABLE corpus_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE people (person_id TEXT PRIMARY KEY, display_name TEXT, name_source TEXT, state TEXT, created_at TEXT, updated_at TEXT);
     CREATE TABLE person_members (member_key TEXT PRIMARY KEY, person_id TEXT NOT NULL);
@@ -35,7 +35,8 @@ function makeCorpus({ built = true } = {}) {
       first_at INTEGER, first_from_owner INTEGER, last_at INTEGER, last_from_owner INTEGER, last_group_at INTEGER, groups_listed INTEGER, groups_active INTEGER,
       conversations INTEGER, owner_started INTEGER, them_started INTEGER, initiation_ratio REAL, owner_reply_first_median_s INTEGER, owner_reply_last_median_s INTEGER,
       owner_reply_first_p90_s INTEGER, owner_replied INTEGER, owner_unanswered INTEGER, their_reply_first_median_s INTEGER, their_reply_last_median_s INTEGER,
-      their_reply_first_p90_s INTEGER, their_replied INTEGER, their_unanswered INTEGER, waiting_chats INTEGER, waiting_since INTEGER, by_network TEXT, generation INTEGER);
+      their_reply_first_p90_s INTEGER, their_replied INTEGER, their_unanswered INTEGER, ball_in_court_chats INTEGER, ball_in_court_since INTEGER, by_network TEXT, generation INTEGER);
+    CREATE TABLE identity_decisions (a TEXT NOT NULL, b TEXT NOT NULL, decision TEXT NOT NULL, decided_at TEXT NOT NULL, PRIMARY KEY (a, b));
     CREATE TABLE identity_conflicts (id INTEGER PRIMARY KEY, dedupe_key TEXT, reason TEXT, detail TEXT, first_seen TEXT, last_seen TEXT, resolved_at TEXT);
     CREATE TABLE identity_suggestions (a TEXT, b TEXT, reason TEXT);`];
   if (built) sql.push(`INSERT INTO corpus_meta VALUES ('built_at', '${new Date(NOW - 3_600_000).toISOString()}');`);
@@ -78,7 +79,7 @@ test('who reads one person from the corpus: chats with references, stats, and su
   assert.match(r.stdout, /^c[0-9a-f]+ {2}WhatsApp · 1 messages/m);
   assert.match(r.stdout, /4 from them, 2 from you, 3 from them in groups/);
   assert.match(r.stdout, /you started 25%\. Your reply time: median 12m \(10 answered, 2 not within 48h\)\. Theirs: 25m/);
-  assert.match(r.stdout, /Waiting on you: 1 chat/);
+  assert.match(r.stdout, /Ball in the Owner's court: 1 chat/);
   assert.match(r.stdout, /Maybe the same person: Sam Okafor \(p_bb22\)\. Not joined\. Ask the Owner\./);
   assert.match(r.stdout, /built 1h ago/);
 });
@@ -131,4 +132,28 @@ test('the matching keys agree with the companion', async () => {
   assert.deepEqual((await findPeople(file, "o'brien")), [], 'quotes in a name cannot break the query');
   const p = await personProfile(file, 'p_aa11');
   assert.match(renderWho(p, { now: NOW }), /Groups: 2 together, 1 where they wrote in the last year/);
+});
+
+test('same and different record the Owner\'s answer, only with --confirmed, never in an unattended run', () => {
+  const file = makeCorpus();
+  const no = run(file, 'same', 'p_aa11', 'p_bb22');
+  assert.equal(no.status, 2);
+  assert.match(no.stderr, /Only the Owner can say/);
+  const drafts = spawnSync(process.execPath, [BA, 'same', 'p_aa11', 'p_bb22', '--confirmed'], { env: { ...process.env, BEEPER_ASSISTANT_MODE: 'drafts', BEEPER_ASSISTANT_HOME: mkdtempSync(join(tmpdir(), 'ba-test-')), BEEPER_ASSISTANT_CORPUS: file }, encoding: 'utf8' });
+  assert.match(drafts.stderr, /Drafts-only mode is on/);
+  const yes = run(file, 'different', 'p_aa11', 'p_bb22', '--confirmed');
+  assert.equal(yes.status, 0, yes.stderr);
+  assert.match(yes.stdout, /Recorded: different people/);
+  const rows = JSON.parse(execFileSync('/usr/bin/sqlite3', ['-json', file, 'SELECT a, b, decision FROM identity_decisions'], { encoding: 'utf8' }));
+  assert.deepEqual(rows, [{ a: 'beeper:linkedin:@li_okafor', b: 'beeper:whatsapp:@wa_sam', decision: 'different' }]);
+  assert.match(run(file, 'same', 'p_aa11', 'p_aa11', '--confirmed').stderr, /already the same person/);
+  assert.match(run(file, 'same', 'Sam', 'p_aa11', '--confirmed').stderr, /Usage: same/);
+});
+
+test('who reads a corpus in WAL mode whose -wal and -shm files are gone', async () => {
+  const file = makeCorpus();
+  // An ordinary open and close leaves the database in WAL mode with no sidecar files,
+  // which macOS's sqlite3 cannot open read-only.
+  execFileSync('/usr/bin/sqlite3', [file, 'PRAGMA journal_mode = WAL; SELECT count(*) FROM people;']);
+  assert.match(run(file, 'who', 'Sam Rivera').stdout, /^WHO · Sam Rivera/);
 });

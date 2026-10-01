@@ -6,7 +6,7 @@ import { homedir } from 'node:os';
 import { BeeperError, SEARCH_MEDIA, apiOnce, asList, attachmentFile, listChats, listChatsSince, listMessages, listMessagesFast, participantsOf, runBeeper, searchChats, searchMessages, showChat } from './lib/beeper.mjs';
 import { loadContacts, looksLikeEmail, looksLikePhone, normalizeEmail, normalizePhone, ownersOf, resetContacts, searchPeople } from './lib/contacts.mjs';
 import { addContact } from './lib/contacts-write.mjs';
-import { findPeople, openCorpus, personProfile } from './lib/corpus.mjs';
+import { decideSame, findPeople, openCorpus, personProfile } from './lib/corpus.mjs';
 import { HistoryError, chatStats, historyStatus, messagesAround, strangerRates } from './lib/history.mjs';
 import { NotesError, addNote, deleteNote, listNotes } from './lib/notes.mjs';
 import { collectTriage } from './lib/triage-run.mjs';
@@ -306,7 +306,13 @@ async function cmdWho({ pos, flags }) {
     console.log(out.join('\n'));
     return;
   }
-  const p = await personProfile(corpus.file, people[0].person_id);
+  // The corpus may rebuild between the lookup and the profile. Look again once.
+  let p = await personProfile(corpus.file, people[0].person_id);
+  if (!p) {
+    const again = await findPeople(corpus.file, q);
+    p = again.length === 1 ? await personProfile(corpus.file, again[0].person_id) : null;
+  }
+  if (!p) throw new UsageError('The corpus changed while reading it. Run who again.');
   const ids = p.chats.map((c) => c.beeper_chat_id || (c.chat_key.startsWith('imessage:') ? null : c.chat_key)).filter(Boolean);
   const state = loadState();
   rememberChats(state, ids.map((id) => ({ id })));
@@ -316,6 +322,18 @@ async function cmdWho({ pos, flags }) {
     return;
   }
   console.log(renderWho(p, { now, builtAt: corpus.builtAt, chatRef: chatAlias }));
+}
+
+// The Owner's answer about whether two People from who are one person. Only on the Owner's
+// own words, so it needs --confirmed, and never in an Unattended run.
+async function cmdSameOrDifferent(decision, { pos, flags }) {
+  if (pos.length !== 2 || !pos.every((id) => /^p_[0-9a-f]+$/.test(id))) throw new UsageError(`Usage: ${decision} <person id> <person id> --confirmed, with ids from who`);
+  if (!flags.confirmed) throw new UsageError(`Not done. Only the Owner can say whether these are ${decision === 'same' ? 'the same person' : 'different people'}. Ask them, then run again with --confirmed.`);
+  const corpus = await openCorpus();
+  if (!corpus.ok) throw new UsageError(`No corpus to record this in: ${corpus.reason}.`);
+  const r = await decideSame(corpus.file, pos[0], pos[1], decision);
+  if (!r.ok) throw new UsageError(r.reason);
+  console.log(`Recorded: ${decision === 'same' ? 'the same person' : 'different people'}. It takes effect when the corpus next rebuilds, within about 15 minutes.`);
 }
 
 async function cmdSearch({ pos, flags }) {
@@ -911,6 +929,8 @@ Runs with no person in the turn
   place                               read queued drafts from stdin and save them here
 
 Write, needs --confirmed after the Owner says yes
+  same <person> <person>              record the Owner's word that two people from who are one person
+  different <person> <person>         or that they are different people
   send <chat> --text "…" --after <message> [--reply-to <message>]
   contact <chat> --first "…" [--last "…"]     add the chat's number to the Mac's Contacts under a name
   react <chat> <message> <emoji>
@@ -958,7 +978,7 @@ function currentMode() {
   return RANK[e] <= RANK[f] ? e : f;
 }
 
-const COMMANDS = { check: cmdCheck, triage: cmdTriage, chat: cmdChat, find: cmdFind, who: cmdWho, search: cmdSearch, media: cmdMedia, dismiss: cmdDismiss, undismiss: cmdUndismiss, draft: cmdDraft, send: cmdSend, read: cmdRead, react: cmdReact, remind: cmdRemind, unremind: cmdUnremind, edit: cmdEdit, delete: cmdDelete, group: cmdGroup, start: cmdStart, contact: cmdContact, pending: cmdPending, skip: cmdSkip, tidy: cmdTidy, outbox: cmdOutbox, place: cmdPlace, mode: cmdMode, notes: cmdNotes, note: cmdNote };
+const COMMANDS = { check: cmdCheck, triage: cmdTriage, chat: cmdChat, find: cmdFind, who: cmdWho, same: (a) => cmdSameOrDifferent('same', a), different: (a) => cmdSameOrDifferent('different', a), search: cmdSearch, media: cmdMedia, dismiss: cmdDismiss, undismiss: cmdUndismiss, draft: cmdDraft, send: cmdSend, read: cmdRead, react: cmdReact, remind: cmdRemind, unremind: cmdUnremind, edit: cmdEdit, delete: cmdDelete, group: cmdGroup, start: cmdStart, contact: cmdContact, pending: cmdPending, skip: cmdSkip, tidy: cmdTidy, outbox: cmdOutbox, place: cmdPlace, mode: cmdMode, notes: cmdNotes, note: cmdNote };
 
 async function main() {
   const [name, ...rest] = process.argv.slice(2);

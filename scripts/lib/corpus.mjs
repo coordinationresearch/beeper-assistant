@@ -9,15 +9,28 @@ import { join } from 'node:path';
 export const corpusPath = () => process.env.BEEPER_ASSISTANT_CORPUS || join(homedir(), 'Library', 'Application Support', 'Beeper Companion', 'corpus.db');
 
 // The schema this reader was written against. A newer corpus that still has it works.
-const NEEDS = 'corpus-0001-corpus';
+const NEEDS = 'corpus-0003-review-fixes';
 
-function query(file, sql) {
+function run(args) {
   return new Promise((resolve, reject) => {
-    execFile('/usr/bin/sqlite3', ['-readonly', '-json', `file:${file}?mode=ro`, sql], { maxBuffer: 64 * 1024 * 1024, timeout: 20_000 }, (err, stdout, stderr) => {
+    execFile('/usr/bin/sqlite3', args, { maxBuffer: 64 * 1024 * 1024, timeout: 20_000 }, (err, stdout, stderr) => {
       if (err) return reject(new Error(String(stderr || err.message).trim().split('\n').pop()));
       try { resolve(stdout.trim() ? JSON.parse(stdout) : []); } catch (e) { reject(e); }
     });
   });
+}
+
+// Read-only first. macOS's sqlite3 cannot open a WAL database read-only once its -wal and
+// -shm files are gone, so a refused open is tried again as an ordinary one, which creates
+// them, runs only this SELECT, and removes them.
+async function query(file, sql, { write = false } = {}) {
+  if (write) return run(['-json', '-cmd', '.timeout 5000', file, sql]);
+  // Reads run side by side, and one may be recovering the file while another opens it, so
+  // each waits for a lock instead of failing at once.
+  try { return await run(['-readonly', '-json', '-cmd', '.timeout 5000', `file:${file}?mode=ro`, sql]); } catch (e) {
+    if (!/unable to open database file/i.test(e.message)) throw e;
+    return run(['-json', '-cmd', '.timeout 5000', file, sql]);
+  }
 }
 const str = (s) => `'${String(s).replace(/'/g, "''")}'`;
 
@@ -67,8 +80,10 @@ export async function findPeople(file, q) {
     if (!e) return [];
     where = `p.person_id IN (SELECT pm.person_id FROM person_members pm WHERE pm.member_key IN (SELECT handle_key FROM handles WHERE email = ${str(e)} UNION SELECT card_key FROM card_addresses WHERE kind = 'email' AND value = ${str(e)}))`;
   } else if (phoneDigits(text) && /^[+()\d\s.\-]+$/.test(text)) {
-    const like = str(`%${phoneDigits(text)}`);
-    where = `p.person_id IN (SELECT pm.person_id FROM person_members pm WHERE pm.member_key IN (SELECT handle_key FROM handles WHERE phone LIKE ${like} UNION SELECT card_key FROM card_addresses WHERE kind = 'phone' AND value LIKE ${like}))`;
+    // Canonical numbers can end in ;ext=, so a number also finds the desk lines behind it.
+    const digits = phoneDigits(text);
+    const has = (col) => `(${col} LIKE ${str(`%${digits}`)} OR ${col} LIKE ${str(`%${digits};ext=%`)})`;
+    where = `p.person_id IN (SELECT pm.person_id FROM person_members pm WHERE pm.member_key IN (SELECT handle_key FROM handles WHERE ${has('phone')} UNION SELECT card_key FROM card_addresses WHERE kind = 'phone' AND ${has('value')}))`;
   } else {
     const words = text.toLowerCase().split(/\s+/).filter(Boolean);
     const match = (col) => words.map((w) => `(' ' || lower(${col}) || ' ') LIKE ${str(`% ${w.replace(/[%_]/g, '')}%`)}`).join(' AND ');
@@ -100,4 +115,23 @@ export async function personProfile(file, id) {
   ]);
   if (!people[0]) return null;
   return { ...people[0], chats, stats: stats[0] || null, conflicts: conflicts.map((c) => c.reason), suggestions };
+}
+
+// The Owner's answer about whether two People are one person. Stored on one member of each,
+// as the companion stores it, so it survives any change of id. It takes effect at the
+// corpus's next rebuild.
+export async function decideSame(file, a, b, decision) {
+  if (decision !== 'same' && decision !== 'different') throw new Error('decision must be same or different');
+  const rep = async (id) => {
+    const rows = await query(file, `SELECT member_key FROM person_members WHERE person_id = coalesce((SELECT person_id FROM people WHERE person_id = ${str(id)}),
+      (SELECT redirect_to FROM retired_people WHERE person_id = ${str(id)})) ORDER BY member_key LIMIT 1`);
+    return rows[0] ? rows[0].member_key : null;
+  };
+  const [x, y] = [await rep(a), await rep(b)];
+  if (!x || !y) return { ok: false, reason: 'One of those people is not in the corpus.' };
+  if (x === y) return { ok: false, reason: 'Those are already the same person.' };
+  const [lo, hi] = x < y ? [x, y] : [y, x];
+  await query(file, `INSERT INTO identity_decisions (a, b, decision, decided_at) VALUES (${str(lo)}, ${str(hi)}, ${str(decision)}, ${str(new Date().toISOString())})
+    ON CONFLICT (a, b) DO UPDATE SET decision = excluded.decision, decided_at = excluded.decided_at`, { write: true });
+  return { ok: true };
 }

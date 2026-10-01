@@ -309,7 +309,7 @@ export function renderWho(p, { now = Date.now(), builtAt = null, chatRef = (id) 
       out.push(`Conversations: ${s.conversations}, you started ${ratio}. Your reply time: median ${span(s.owner_reply_first_median_s)} (${s.owner_replied} answered, ${s.owner_unanswered} not within 48h). Theirs: ${span(s.their_reply_first_median_s)}.`);
     }
     out.push(`Groups: ${s.groups_listed} together, ${s.groups_active} where they wrote in the last year.`);
-    if (s.waiting_chats) out.push(`Waiting on you: ${s.waiting_chats} chat${s.waiting_chats === 1 ? '' : 's'}, since ${age(now - s.waiting_since)} ago. That is who spoke last, not whether a reply is owed.`);
+    if (s.ball_in_court_chats) out.push(`Ball in the Owner's court: ${s.ball_in_court_chats} chat${s.ball_in_court_chats === 1 ? '' : 's'}, since ${age(now - s.ball_in_court_since)} ago. That is who spoke last, not whether a reply is owed.`);
   } else out.push('No messages with this person in the corpus.');
   for (const c of p.conflicts) out.push(`Identity conflict (${c}): evidence disagrees about who this is. Ask the Owner before relying on it.`);
   for (const x of p.suggestions.slice(0, 5)) out.push(`Maybe the same person: ${x.other_name || '(no name)'} (${x.other}). Not joined. Ask the Owner.`);
