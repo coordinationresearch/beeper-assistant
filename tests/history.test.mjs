@@ -5,7 +5,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { HistoryError, appleDate, aroundInBeeper, aroundInMessages, beeperRowToMessage, textFromAttributedBody } from '../scripts/lib/history.mjs';
+import { HistoryError, appleDate, aroundInBeeper, aroundInMessages, beeperRowToMessage, chatStats, textFromAttributedBody } from '../scripts/lib/history.mjs';
 import { renderChat } from '../scripts/lib/render.mjs';
 import { messageAlias } from '../scripts/lib/state.mjs';
 import { buildIndex } from '../scripts/lib/contacts.mjs';
@@ -139,4 +139,52 @@ test('reactions name who reacted, and iMessage words become emoji', () => {
   const tap = [{ ...msgs[0], reactions: [{ reactionKey: '😂', participantName: '+15550100001', isSender: false }] }];
   assert.match(renderChat(c, tap, { now: NOW, contacts: buildIndex(CONTACT_ROWS) }), /\[reactions 😂 Ada Lovelace\]/);
   assert.match(renderChat(c, tap, { now: NOW }), /\[reactions 😂 \+15550100001\]/, 'a number with no contact still shows');
+});
+
+// ---- Counts for ranking ----
+test('Beeper counts come per Chat, without reactions, hidden rows, or deleted messages', async () => {
+  const now = Date.parse('2026-01-01T00:00:00Z') + 400 * 60_000;
+  const { stats, problems } = await chatStats([{ id: ROOM }, { id: '!other-room:beeper.local' }, { id: '!no-such-room' }], { now, beeperFile: beeper, messagesFile: join(dir, 'missing.db') });
+  assert.deepEqual(problems, []);
+  const a = stats.get(ROOM);
+  // 30 messages, the even ids are the Owner's. The reactions and the hidden row are left out.
+  assert.deepEqual([a.messages, a.owner, a.theirs, a.owner90, a.source], [30, 15, 15, 15, 'beeper-file']);
+  assert.equal(a.first, new Date(Date.parse('2026-01-01T00:00:00Z') + 10 * 60_000).toISOString());
+  assert.equal(a.ownerLast, new Date(Date.parse('2026-01-01T00:00:00Z') + 300 * 60_000).toISOString());
+  assert.equal(stats.get('!other-room:beeper.local').owner, 1);
+  assert.equal(stats.has('!no-such-room'), false);
+});
+
+test('newer Beeper layouts are read from their columns, and seconds count as milliseconds', async () => {
+  const day = 86_400_000, now = Date.parse('2026-09-01T00:00:00Z');
+  const f = makeDB('index-new.db', [
+    'create table mx_room_messages (id integer primary key, roomID text, type text, isDeleted integer, isSentByMe integer, timestamp integer, message json);',
+    // The Owner wrote 200 days ago and 10 days ago, once in seconds. They wrote 5 days ago.
+    `insert into mx_room_messages values (1, '!r', 'TEXT', 0, 1, ${now - 200 * day}, '{}');`,
+    `insert into mx_room_messages values (2, '!r', 'TEXT', 0, 1, ${Math.floor((now - 10 * day) / 1000)}, '{}');`,
+    `insert into mx_room_messages values (3, '!r', 'TEXT', 0, 0, ${now - 5 * day}, '{}');`,
+  ].join('\n'));
+  const { stats } = await chatStats([{ id: '!r' }], { now, beeperFile: f, messagesFile: join(dir, 'missing.db') });
+  const r = stats.get('!r');
+  assert.deepEqual([r.messages, r.owner, r.theirs, r.owner90, r.ownerWeeks26], [3, 2, 1, 1, 1]);
+  assert.equal(r.ownerLast, new Date(Math.floor((now - 10 * day) / 1000) * 1000).toISOString());
+});
+
+test('iMessage counts are found through a message the Chat showed', async () => {
+  const at = Number((BASE + 7n) / 1_000_000_000n) + 978_307_200;
+  const now = (at + 86_400) * 1000;
+  const { stats, problems } = await chatStats([{ id: 'imsg##thread:test', messageIDs: ['G99', 'G4'] }, { id: 'imsg##thread:none', messageIDs: ['G404'] }], { now, beeperFile: beeper, messagesFile: apple });
+  assert.deepEqual(problems, []);
+  const s = stats.get('imsg##thread:test');
+  // Seven real messages in chat 1, the odd ones from the Owner. Tapbacks and the group event are left out.
+  assert.deepEqual([s.messages, s.owner, s.theirs, s.owner90, s.ownerWeeks26, s.source], [7, 4, 3, 4, 1, 'messages-file']);
+  assert.equal(s.ownerLast, appleDate(String(BASE + 7n)));
+  assert.equal(stats.has('imsg##thread:none'), false);
+});
+
+test('a file that cannot be read leaves its Chats without counts and says why', async () => {
+  const { stats, problems } = await chatStats([{ id: ROOM }, { id: 'imsg##thread:test', messageIDs: ['G4'] }], { beeperFile: join(dir, 'missing.db'), messagesFile: apple });
+  assert.equal(stats.has(ROOM), false);
+  assert.equal(stats.has('imsg##thread:test'), true);
+  assert.match(problems.join(' '), /Beeper's history file is not on this Mac/);
 });

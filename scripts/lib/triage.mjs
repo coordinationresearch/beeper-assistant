@@ -218,6 +218,9 @@ export function toRow(chat, { now, contacts }) {
     reaction: kind === 'reaction',
     hasDraft: !!(chat.draft && (draftText(chat) || chat.draft.attachments)),
     reminder: chat.reminder || null,
+    account: chat.accountID || '',
+    inContacts: !group && handlesOf(chat).some((h) => !!nameFor(contacts, h)),
+    lastMessageID: pv.id || null,
   };
 }
 
@@ -253,6 +256,16 @@ export function applyContext(row, messages, { now = Date.now(), shown = 4 } = {}
   const newest = burst[burst.length - 1];
   row.newestID = newest.id;
   row.newestHash = textHash(htmlToText(newest.text));
+  // For ranking: the run's text, and the Owner's message before it, which says whether the
+  // run answers the Owner rather than asks. Kept out of JSON output and snapshots.
+  const real = messages.filter(isReal);
+  const before = real[real.length - burst.length - 1];
+  const hidden = (k, v) => Object.defineProperty(row, k, { value: v, enumerable: false, writable: true, configurable: true });
+  hidden('texts', burst.slice(-6).map((m) => htmlToText(m.text)));
+  hidden('ownerBefore', before && before.isSender ? { id: before.id, text: htmlToText(before.text) } : null);
+  row.runIDs = burst.map((m) => m.id);
+  // How long the Owner has left them, from the first message not yet answered.
+  if (Date.parse(burst[0].timestamp)) row.waitingSince = burst[0].timestamp;
   // "can you send it? / thanks!" still asks for something. Only a run made of nothing but
   // acknowledgments counts as one.
   const kinds = burst.map(previewKind);
@@ -270,7 +283,9 @@ export function applyContext(row, messages, { now = Date.now(), shown = 4 } = {}
   return row;
 }
 
-export function finalizeTriage(t, { maxPeople = 100, maxGroups = 10 } = {}) {
+// Drops rows that left the list since they were read: outside the window, answered, or
+// ending in nothing owed. Counts what it drops.
+export function filterTriage(t) {
   const s = t.stats;
   const keep = [];
   const windowMs = (t.windowDays || DEFAULT_WINDOW_DAYS) * DAY;
@@ -280,15 +295,30 @@ export function finalizeTriage(t, { maxPeople = 100, maxGroups = 10 } = {}) {
     if (r.state === 'read' && NOTHING_OWED.has(r.kind)) { s.nothingOwed++; continue; }
     keep.push(r);
   }
+  t.people = keep;
+  return t;
+}
+
+// Unread first, then newest. Ranking replaces this when it runs.
+export function sortByState(t) {
   const newest = (a, b) => a.ageMs - b.ageMs;
-  keep.sort((a, b) => (a.state === b.state ? newest(a, b) : a.state === 'unread' ? -1 : 1));
+  t.people.sort((a, b) => (a.state === b.state ? newest(a, b) : a.state === 'unread' ? -1 : 1));
   t.groups.sort((a, b) => (b.mentions - a.mentions) || newest(a, b));
-  s.morePeople = Math.max(0, keep.length - maxPeople);
+  return t;
+}
+
+export function capTriage(t, { maxPeople = 100, maxGroups = 10 } = {}) {
+  const s = t.stats;
+  s.morePeople = Math.max(0, t.people.length - maxPeople);
   s.moreGroups = Math.max(0, t.groups.length - maxGroups);
-  t.people = keep.slice(0, maxPeople);
+  t.people = t.people.slice(0, maxPeople);
   t.groups = t.groups.slice(0, maxGroups);
   s.unresolvedNames = t.people.filter((r) => !r.nameResolved).length;
   return t;
+}
+
+export function finalizeTriage(t, opts = {}) {
+  return capTriage(sortByState(filterTriage(t)), opts);
 }
 
 export function buildTriage(chats, { now = Date.now(), windowDays = DEFAULT_WINDOW_DAYS, state = null, contacts = null, maxPeople = 100, maxGroups = 10, includeAutomated = false, finalize = true } = {}) {

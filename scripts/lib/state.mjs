@@ -1,7 +1,7 @@
 // Local state: dismissed chats and the alias cache. One small JSON file.
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, copyFileSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { extname, join } from 'node:path';
 
@@ -12,7 +12,15 @@ export function stateDir() {
 const file = () => join(stateDir(), 'state.json');
 const EMPTY = () => ({ version: 1, dismissed: {}, aliases: {}, drafted: {}, skipped: {}, placed: {} });
 
-export function loadState() {
+// Several processes write this file: `ba` in an agent, the hourly unattended run, and the
+// companion. Each one loaded its own copy earlier, so a plain overwrite would drop what another
+// wrote in between, such as a dismissal. Saving therefore takes a lock, reads the file again,
+// and applies only the entries this process changed since it loaded.
+const MAPS = ['dismissed', 'aliases', 'drafted', 'skipped', 'placed'];
+const BASE = Symbol('loaded');
+const clone = (s) => Object.fromEntries(MAPS.map((m) => [m, JSON.parse(JSON.stringify(s[m] || {}))]));
+
+function readState() {
   try {
     const s = JSON.parse(readFileSync(file(), 'utf8'));
     const aliases = {};
@@ -23,11 +31,56 @@ export function loadState() {
   }
 }
 
+export function loadState() {
+  const s = readState();
+  s[BASE] = clone(s);
+  return s;
+}
+
+const LOCK_STALE_MS = 10_000;
+const LOCK_WAIT_MS = 3_000;
+const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+
+// A directory is created atomically or not at all, so it serves as the lock. A lock older than
+// ten seconds belonged to a process that died. After three seconds of waiting, write anyway:
+// the merge below still keeps what the other writer saved.
+function withLock(action) {
+  const lock = join(stateDir(), 'state.lock');
+  const until = Date.now() + LOCK_WAIT_MS;
+  let held = false;
+  while (!held) {
+    try { mkdirSync(lock); held = true; } catch (e) {
+      if (e.code !== 'EEXIST') break;
+      try { if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) { rmSync(lock, { recursive: true, force: true }); continue; } } catch { continue; }
+      if (Date.now() > until) break;
+      pause(20);
+    }
+  }
+  try { return action(); } finally { if (held) rmSync(lock, { recursive: true, force: true }); }
+}
+
 export function saveState(state) {
   mkdirSync(stateDir(), { recursive: true });
-  const tmp = `${file()}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(state, null, 1));
-  renameSync(tmp, file());
+  withLock(() => {
+    const disk = readState();
+    const base = state[BASE] || clone(EMPTY());
+    for (const m of MAPS) {
+      const mine = state[m] || {};
+      for (const [k, v] of Object.entries(mine)) {
+        if (JSON.stringify(v) === JSON.stringify(base[m][k])) continue;
+        delete disk[m][k]; // re-adding moves an alias to the newest end
+        disk[m][k] = v;
+      }
+      for (const k of Object.keys(base[m])) if (!(k in mine)) delete disk[m][k];
+    }
+    trimAliases(disk);
+    const tmp = `${file()}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify(disk, null, 1));
+    renameSync(tmp, file());
+    // Carry on from what is now on disk.
+    for (const m of MAPS) state[m] = disk[m];
+    state[BASE] = clone(disk);
+  });
 }
 
 // An alias is derived from the ID, so it can be missing from the cache but never wrong.

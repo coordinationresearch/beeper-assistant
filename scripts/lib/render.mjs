@@ -34,24 +34,42 @@ function rowLine(r) {
   const st = r.state === 'unread' ? `UNREAD${r.unreadCount ? ` ${r.unreadCount}` : ''}${r.mentions ? ` @${r.mentions}` : ''}` : 'READ';
   const who = r.type === 'group' ? `${r.name} (${r.members})` : r.name;
   const said = r.type === 'group' && r.lastSender ? `${r.lastSender}: ` : r.lastFrom === 'me' ? 'me: ' : r.messages > 1 ? `${r.messages}${r.messagesMore ? '+' : ''} messages: ` : '';
-  return `${r.ref}  ${st.padEnd(11)} ${who} · ${r.network} · ${age(r.ageMs)}${flags(r)}  ${said}${quote(r.preview)}`;
+  const line = `${r.ref}  ${st.padEnd(11)} ${who} · ${r.network} · ${age(r.ageMs)}${flags(r)}  ${said}${quote(r.preview)}`;
+  return r.rank ? `${line}\n${' '.repeat(11)}why: ${r.rank.reason}` : line;
 }
+
+const CLASS_TITLES = {
+  urgent: 'URGENT: waiting costs something today',
+  waiting: 'WAITING ON YOU',
+  unsure: 'UNSURE: only the Owner can tell',
+  nothing: 'NOTHING OWED, by the rules',
+};
 
 export function renderTriage(t) {
   const out = [];
-  out.push(`TRIAGE · last ${t.windowDays} days · ${t.people.length} ${t.people.length === 1 ? 'person' : 'people'} · ${t.groups.length} ${t.groups.length === 1 ? 'group' : 'groups'}`);
+  const ranked = t.people.some((r) => r.rank);
+  out.push(`TRIAGE · last ${t.windowDays} days · ${t.people.length} ${t.people.length === 1 ? 'person' : 'people'} · ${t.groups.length} ${t.groups.length === 1 ? 'group' : 'groups'}${ranked ? ' · ranked, highest first' : ''}`);
   out.push(UNTRUSTED_NOTE);
-  out.push('');
-  out.push('PEOPLE');
-  if (!t.people.length) out.push('  (none)');
-  for (const r of t.people) out.push(rowLine(r));
+  if (ranked) {
+    for (const cls of Object.keys(CLASS_TITLES)) {
+      const rows = t.people.filter((r) => r.rank.class === cls);
+      if (!rows.length) continue;
+      out.push('', `${CLASS_TITLES[cls]} (${rows.length})`);
+      for (const r of rows) out.push(rowLine(r));
+    }
+    if (!t.people.length) out.push('', 'PEOPLE', '  (none)');
+  } else {
+    out.push('', 'PEOPLE');
+    if (!t.people.length) out.push('  (none)');
+    for (const r of t.people) out.push(rowLine(r));
+  }
   out.push('');
   out.push('GROUPS, unread only');
   if (!t.groups.length) out.push('  (none)');
-  for (const r of t.groups) out.push(rowLine(r));
+  for (const r of t.groups) out.push(rowLine(r) + (r.rank && r.rank.class !== 'nothing' ? ` [${r.rank.class.toUpperCase()}]` : ''));
   const s = t.stats;
   const hidden = [
-    s.morePeople && `${s.morePeople} more people beyond the row limit, all older, so rerun with --max ${t.people.length + s.morePeople}`,
+    s.morePeople && `${s.morePeople} more people ${ranked ? 'ranked below' : 'beyond'} the row limit, ${ranked ? '' : 'all older, '}so rerun with --max ${t.people.length + s.morePeople}`,
     s.moreGroups && `${s.moreGroups} more groups`,
     s.dismissed && `${s.dismissed} dismissed`,
     (s.olderUnread + s.stale) && `${s.olderUnread + s.stale}${t.truncated ? ' or more' : ''} older than the window, ${s.olderUnread} of them unread`,
@@ -65,6 +83,8 @@ export function renderTriage(t) {
   out.push('');
   if (hidden.length) out.push(`Not shown: ${hidden.join(' · ')}`);
   if (s.unresolvedNames) out.push(`${s.unresolvedNames} people show a number because Contacts has no match${t.contactsAvailable === false ? ' (Contacts could not be read, run the check command)' : ''}.`);
+  if (t.history && t.history.problems && t.history.problems.length) out.push(`History counts were partly unavailable, so some rows show "no history on this Mac": ${t.history.problems.join(' ')}`);
+  if (s.notInspected) out.push(`${s.notInspected} people were ranked from their preview alone, past the 150 the command reads closely.`);
   if (t.truncated) out.push('The chat scan hit its limit before reaching the start of the window. Use a shorter --days.');
   return out.join('\n');
 }

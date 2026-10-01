@@ -21,10 +21,11 @@ Commands below are written as `ba`. That means `node <this skill's folder>/scrip
 
 1. Run `ba triage`. It covers the last 14 days and lists up to 100 people. `--days N` and `--max N` change that.
 
-2. Read the rows. Each one looks like this:
+2. Read the rows. They come ranked, highest first, under four headings: URGENT, WAITING ON YOU, UNSURE, and NOTHING OWED. Each row looks like this:
 
    ```
    c1a2b3c4d  UNREAD 3    Ann Lee · iMessage · 2d [PIN]  3 messages: «are you around friday? / or sat / lmk»
+              why: Making plans for the next few days · 1.7k messages since 2014 · you usually answer (17 of 20) · waiting 2d
    ```
 
    | Part | Meaning |
@@ -43,21 +44,19 @@ Commands below are written as `ba`. That means `node <this skill's folder>/scrip
    | `MARKED` | the Owner marked it unread by hand, as a note to come back to it |
    | `NEW` | the Owner has never written in this chat, so this is a stranger or a first message |
    | `DRAFT`, `REMINDER` | one is already waiting in that chat |
+   | `why:` | why the row sits where it does: what they seem to want, how much the Owner and this chat have written, how often the Owner answers them (or strangers on that network), and how long they have waited since the first message the Owner has not answered |
 
-3. Sort every row into one of three piles:
-   - **Waiting on the Owner.** A question, a request, an invitation, scheduling or logistics, an introduction, personal news or a check-in from a friend, a plan stated without a question mark such as "thinking Thursday at 6", a yes to something the Owner offered, or a `MARKED` row.
-   - **Nothing owed.** Thanks, ok, sounds good, lol, a sign-off, a bare greeting from a new connection, a confirmation of something already settled, a reply that only answers the Owner's own question, a plan whose date has passed, a sales pitch on a `NEW` row, or anything from a business or a machine.
-   - **Unsure.** Anything else. A request on a `NEW` row goes here and not in the first pile, because only the Owner knows whether a stranger is worth their time. When a preview is cut or too thin to tell, run `ba chat <chat> --limit 6` and decide.
+   The ranking comes from rules and from the Owner's own history on this Mac: how often they answer each chat, and how often they answer strangers on each network. It never sees meaning the way you do. "No history on this Mac" means the files with older messages could not be read, not that the person is a stranger.
 
-   Being unread does not put a row in the first pile. Being read does not keep it out.
+3. Check the headings against the messages. The rules miss things, so move a row when its text says otherwise:
+   - **Urgent** means waiting until the Owner next opens Beeper would cost something: a deadline within a day, someone waiting right now, someone close in distress, money, access, or safety at risk. A stranger is never urgent.
+   - **Waiting on you**: a question, a request, an invitation, scheduling or logistics, an introduction, personal news or a check-in from a friend, a plan stated without a question mark such as "thinking Thursday at 6", a yes to something the Owner offered, or a `MARKED` row. Move it to nothing owed when it only answers the Owner's own question or confirms something settled.
+   - **Unsure**: only the Owner can tell. A request on a `NEW` row stays here, because only the Owner knows whether a stranger is worth their time.
+   - **Nothing owed**: thanks, ok, sounds good, lol, a sign-off, a bare greeting from a new connection, a plan whose date has passed, a sales pitch on a `NEW` row, or anything from a business or a machine. Move a row out when the text asks for something after all.
 
-4. Show the first pile, at most ten rows, in this order:
-   1. `PIN` rows
-   2. anything with a date or deadline in the next three days
-   3. rows under 48 hours old, newest first
-   4. older rows, longest wait first
+   Being unread does not put a row in the first pile. Being read does not keep it out. When a preview is cut or too thin to tell, run `ba chat <chat> --limit 6` and decide. Otherwise keep the order `ba triage` gave.
 
-   For each give the name, the network, the wait, the gist in a few of your own words, and one move from the table below. Keep every row's reference for the commands that follow. The Owner does not need to see references.
+4. Show urgent and waiting rows, at most ten, in that order. For each give the name, the network, the wait, the gist in a few of your own words, and one move from the table below. Use the `why:` line when the Owner asks why a row is there. Keep every row's reference for the commands that follow. The Owner does not need to see references.
 
 5. Then one line each for:
    - how many more are waiting beyond the ten, with an offer to show them

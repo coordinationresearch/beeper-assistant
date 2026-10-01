@@ -201,6 +201,173 @@ export function messagesAround(chat, messageID, opts) {
   return isIMessageChat(chat) ? aroundInMessages(chat.id, messageID, opts) : aroundInBeeper(chat.id, messageID, opts);
 }
 
+// ---- How much the Owner and each Chat have written, and how often the Owner answers ----
+// Counts only, never text, for ranking the Triage list. A few queries per file cover every
+// Chat at once. iMessage Chats are found through messages the Chat already showed: Beeper's
+// iMessage message id is the guid in the Messages database, and its Chat id names nothing there.
+const DAY_MS = 86_400_000;
+const WEEK_NS = 604_800_000_000_000n;
+export const ANSWER_DAYS = 180; // how far back answer rates look
+export const ANSWER_WITHIN_MS = 2 * DAY_MS; // the horizon earlier reply-pair work used for "answered"
+const appleNs = (ms) => (BigInt(Math.floor(ms / 1000)) - BigInt(APPLE_EPOCH_S)) * 1_000_000_000n;
+const msOf = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? (n < 1e11 ? n * 1000 : n) : null; };
+const appleMs = (v) => (v ? Date.parse(appleDate(v)) : null);
+
+function statsRow(x, source) {
+  const iso = (v) => (v ? new Date(v).toISOString() : null);
+  return {
+    messages: Number(x.n) || 0,
+    owner: Number(x.mine) || 0,
+    theirs: (Number(x.n) || 0) - (Number(x.mine) || 0),
+    owner90: Number(x.mine90) || 0,
+    ownerWeeks26: Number(x.weeks26) || 0,
+    first: iso(x.first),
+    ownerLast: iso(x.lastMine),
+    source,
+  };
+}
+
+// Runs of their messages and whether the Owner answered each within two days. A run starts at
+// their message after the Owner's (or at the start) and ends at the Owner's next message.
+// Runs too recent to have had that long are left out. `msgs` is [{ at, mine }] sorted by time.
+export function answerRate(msgs, now = Date.now()) {
+  let runs = 0, answered = 0;
+  const waits = [];
+  let start = null;
+  for (const m of msgs) {
+    if (!m.mine) { if (start === null) start = m.at; continue; }
+    if (start !== null) {
+      if (now - start >= ANSWER_WITHIN_MS) {
+        runs++;
+        if (m.at - start <= ANSWER_WITHIN_MS) { answered++; waits.push(m.at - start); }
+      }
+      start = null;
+    }
+  }
+  if (start !== null && now - start >= ANSWER_WITHIN_MS) runs++;
+  waits.sort((a, b) => a - b);
+  return { runs, answered, medianAnswerMs: waits.length ? waits[Math.floor((waits.length - 1) / 2)] : null };
+}
+
+function groupRuns(rows, now) {
+  const by = new Map();
+  for (const r of rows) { if (!by.has(r.k)) by.set(r.k, []); by.get(r.k).push(r); }
+  const out = new Map();
+  for (const [k, list] of by) out.set(k, answerRate(list, now));
+  return out;
+}
+
+export async function statsInBeeper(chatIDs, { now = Date.now(), file = beeperDB() } = {}) {
+  const out = new Map();
+  if (!chatIDs.length) return out;
+  await open(file, "Beeper's history file", '');
+  const have = await needColumns(file, 'mx_room_messages', ['roomID', 'type', 'isDeleted', 'message'], "Beeper's history file");
+  // Newer layouts keep the sender and time in columns. Older ones only inside the JSON.
+  const mine = have.has('isSentByMe') ? 'isSentByMe = 1' : "json_extract(message, '$.isSender') = 1";
+  const rawTs = have.has('timestamp') ? 'timestamp' : "json_extract(message, '$.timestamp')";
+  // A few rows store seconds, the rest milliseconds.
+  const ts = `(case when ${rawTs} < 100000000000 then ${rawTs} * 1000 else ${rawTs} end)`;
+  const since90 = now - 90 * DAY_MS, since26w = now - 182 * DAY_MS, sinceAnswer = now - ANSWER_DAYS * DAY_MS;
+  const real = `isDeleted = 0 and type not in (${BEEPER_HIDDEN.map(str).join(', ')}) and roomID in (${chatIDs.map(str).join(', ')}) and ${ts} <= ${now}`;
+  const [rows, timeline] = await Promise.all([
+    query(file, `select roomID id, count(*) n, sum(${mine}) mine, min(${ts}) first, max(case when ${mine} then ${ts} end) lastMine,
+ sum(${mine} and ${ts} > ${since90}) mine90, count(distinct case when ${mine} and ${ts} > ${since26w} then ${ts} / ${7 * DAY_MS} end) weeks26
+from mx_room_messages where ${real} group by roomID`),
+    query(file, `select roomID k, ${ts} at, (${mine}) mine from mx_room_messages where ${real} and ${ts} > ${sinceAnswer} order by roomID, ${ts}`),
+  ]);
+  const rates = groupRuns(timeline.map((x) => ({ k: String(x.k), at: Number(x.at), mine: Number(x.mine) === 1 })), now);
+  for (const x of rows) out.set(String(x.id), { ...statsRow({ ...x, first: msOf(x.first), lastMine: msOf(x.lastMine) }, 'beeper-file'), ...(rates.get(String(x.id)) || answerRate([], now)) });
+  return out;
+}
+
+// `idsByChat` maps a Chat id to the guids of messages it showed. The guids must all lead to
+// the same Messages chat, or the Chat gets no counts: one wrong match would borrow a
+// stranger's history.
+export async function statsInMessages(idsByChat, { now = Date.now(), file = messagesDB() } = {}) {
+  const out = new Map();
+  const guids = [...new Set([...idsByChat.values()].flat().map(String))];
+  if (!guids.length) return out;
+  await open(file, 'The Messages database', 'The app your agent runs in needs Full Disk Access, in System Settings, Privacy & Security.');
+  const have = await needColumns(file, 'message', ['ROWID', 'guid', 'is_from_me', 'associated_message_type', 'item_type'], 'The Messages database');
+  await needColumns(file, 'chat_message_join', ['chat_id', 'message_id', 'message_date'], 'The Messages database');
+  const links = await query(file, `select m.guid g, j.chat_id c from message m join chat_message_join j on j.message_id = m.ROWID where m.guid in (${guids.map(str).join(', ')})`);
+  const chatsOf = new Map();
+  for (const l of links) { const g = String(l.g); if (!chatsOf.has(g)) chatsOf.set(g, new Set()); chatsOf.get(g).add(Number(l.c)); }
+  const appleChat = new Map();
+  for (const [id, ids] of idsByChat) {
+    const found = new Set(ids.flatMap((g) => [...(chatsOf.get(String(g)) || [])]));
+    if (found.size === 1) appleChat.set(id, [...found][0]);
+  }
+  if (!appleChat.size) return out;
+  // Dates are nanoseconds, past what JavaScript holds exactly, so limits and results stay text.
+  const nowNs = appleNs(now), since90 = appleNs(now - 90 * DAY_MS), since26w = appleNs(now - 182 * DAY_MS), sinceAnswer = appleNs(now - ANSWER_DAYS * DAY_MS);
+  const retracted = have.has('date_retracted') ? 'and coalesce(m.date_retracted, 0) = 0' : '';
+  const real = `j.chat_id in (${[...new Set(appleChat.values())].join(', ')}) and m.associated_message_type = 0 and m.item_type = 0 ${retracted} and j.message_date <= ${nowNs}`;
+  const from = 'chat_message_join j join message m on m.ROWID = j.message_id';
+  const [rows, timeline] = await Promise.all([
+    query(file, `select j.chat_id c, count(*) n, sum(m.is_from_me) mine, cast(min(j.message_date) as text) first, cast(max(case when m.is_from_me = 1 then j.message_date end) as text) lastMine,
+ sum(m.is_from_me = 1 and j.message_date > ${since90}) mine90, count(distinct case when m.is_from_me = 1 and j.message_date > ${since26w} then j.message_date / ${WEEK_NS} end) weeks26
+from ${from} where ${real} group by j.chat_id`),
+    query(file, `select j.chat_id k, cast(j.message_date as text) at, m.is_from_me mine from ${from} where ${real} and j.message_date > ${sinceAnswer} order by j.chat_id, j.message_date`),
+  ]);
+  const rates = groupRuns(timeline.map((x) => ({ k: Number(x.k), at: appleMs(x.at), mine: Number(x.mine) === 1 })), now);
+  const byApple = new Map(rows.map((x) => [Number(x.c), x]));
+  for (const [id, c] of appleChat) {
+    const x = byApple.get(c);
+    if (x) out.set(id, { ...statsRow({ ...x, first: appleMs(x.first), lastMine: appleMs(x.lastMine) }, 'messages-file'), ...(rates.get(c) || answerRate([], now)) });
+  }
+  return out;
+}
+
+// Each chat: { id, messageIDs: [ids of messages it showed] }.
+// Returns the counts found, and one line per file that could not be read.
+export async function chatStats(chats, { now = Date.now(), beeperFile = beeperDB(), messagesFile = messagesDB() } = {}) {
+  const stats = new Map();
+  const problems = [];
+  const others = chats.filter((c) => !isIMessageChat(c)).map((c) => c.id);
+  const idsByChat = new Map(chats.filter(isIMessageChat).map((c) => [c.id, (c.messageIDs || []).filter(Boolean)]).filter(([, ids]) => ids.length));
+  const [b, a] = await Promise.allSettled([statsInBeeper(others, { now, file: beeperFile }), statsInMessages(idsByChat, { now, file: messagesFile })]);
+  for (const r of [b, a]) {
+    if (r.status === 'fulfilled') for (const [k, v] of r.value) stats.set(k, v);
+    else problems.push(r.reason && r.reason.message ? r.reason.message : String(r.reason));
+  }
+  return { stats, problems };
+}
+
+// How often the Owner answers a stranger's first message, per account: one-to-one Chats that
+// began with their message in the last 180 days, answered within a week. iMessage is keyed
+// 'imessage', every other network by its Beeper account id.
+export async function strangerRates({ now = Date.now(), beeperFile = beeperDB(), messagesFile = messagesDB() } = {}) {
+  const rates = new Map();
+  const week = 7 * DAY_MS;
+  const jobs = [
+    (async () => {
+      await open(beeperFile, "Beeper's history file", '');
+      const have = await needColumns(beeperFile, 'mx_room_messages', ['roomID', 'type', 'isDeleted', 'isSentByMe', 'timestamp'], "Beeper's history file");
+      await needColumns(beeperFile, 'threads', ['threadID', 'accountID', 'thread'], "Beeper's history file");
+      const ts = '(case when timestamp < 100000000000 then timestamp * 1000 else timestamp end)';
+      const rows = await query(beeperFile, `select t.accountID k, count(*) chats, sum(firstMine is not null and firstMine - first <= ${week}) answered from
+ (select roomID, min(${ts}) first, min(case when isSentByMe = 1 then ${ts} end) firstMine from mx_room_messages where isDeleted = 0 and type not in (${BEEPER_HIDDEN.map(str).join(', ')}) and ${ts} <= ${now} group by roomID) r
+ join threads t on t.threadID = r.roomID where json_extract(t.thread, '$.type') = 'single' and first > ${now - ANSWER_DAYS * DAY_MS} and first <= ${now - week} and (firstMine is null or firstMine > first) group by t.accountID`);
+      for (const x of rows) rates.set(String(x.k), { chats: Number(x.chats), answered: Number(x.answered) });
+    })(),
+    (async () => {
+      await open(messagesFile, 'The Messages database', '');
+      await needColumns(messagesFile, 'chat', ['ROWID', 'style'], 'The Messages database');
+      const since = appleNs(now - ANSWER_DAYS * DAY_MS), until = appleNs(now - week), weekNs = BigInt(week) * 1_000_000n;
+      const rows = await query(messagesFile, `select count(*) chats, sum(firstMine is not null and firstMine - first <= ${weekNs}) answered from
+ (select j.chat_id, min(j.message_date) first, min(case when m.is_from_me = 1 then j.message_date end) firstMine from chat_message_join j join message m on m.ROWID = j.message_id join chat c on c.ROWID = j.chat_id
+  where c.style = 45 and m.associated_message_type = 0 and m.item_type = 0 group by j.chat_id) t
+ where first > ${since} and first <= ${until} and (firstMine is null or firstMine > first)`);
+      if (rows[0] && Number(rows[0].chats)) rates.set('imessage', { chats: Number(rows[0].chats), answered: Number(rows[0].answered) });
+    })(),
+  ];
+  await Promise.allSettled(jobs);
+  return rates;
+}
+
+export const strangerKey = (row) => (/^imsg##/.test(String(row.id || '')) ? 'imessage' : String(row.account || ''));
+
 // For the setup check. Returns one line per source.
 export async function historyStatus() {
   const lines = [];

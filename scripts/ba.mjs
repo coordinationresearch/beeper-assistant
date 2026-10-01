@@ -7,8 +7,9 @@ import { BeeperError, SEARCH_MEDIA, apiOnce, asList, attachmentFile, listChats, 
 import { loadContacts, looksLikeEmail, looksLikePhone, normalizeEmail, normalizePhone, ownersOf, resetContacts, searchPeople } from './lib/contacts.mjs';
 import { addContact } from './lib/contacts-write.mjs';
 import { findPeople, openCorpus, personProfile } from './lib/corpus.mjs';
-import { HistoryError, historyStatus, messagesAround } from './lib/history.mjs';
+import { HistoryError, chatStats, historyStatus, messagesAround, strangerRates } from './lib/history.mjs';
 import { NotesError, addNote, deleteNote, listNotes } from './lib/notes.mjs';
+import { collectTriage } from './lib/triage-run.mjs';
 import { UNTRUSTED_NOTE, age, mediaKind, networkName, quote, renderChat, renderMedia, renderPending, renderSearch, renderTriage, renderWho } from './lib/render.mjs';
 import { appendOutbox, chatAlias, dismiss, dropFromOutbox, isChatAlias, isMessageAlias, loadState, messageAlias, pruneDismissed, readOutbox, recordDraft, recordSkip, copyMedia, pruneMedia, rememberChats, rememberMessages, saveState, savedMessage, stateDir, undismiss } from './lib/state.mjs';
 import { matchChat, outboxEntry, selectPending, stillCurrent, tidyDecision } from './lib/unattended.mjs';
@@ -171,23 +172,21 @@ async function cmdTriage({ flags }) {
   const windowDays = Number(flags.days || DEFAULT_WINDOW_DAYS);
   if (!(windowDays > 0)) throw new UsageError('--days must be a positive number');
   const now = Date.now();
-  const cutoff = now - windowDays * DAY;
-  const [{ chats, truncated }, contacts] = await Promise.all([listChatsSince(cutoff), loadContacts()]);
   const state = loadState();
-  pruneDismissed(state, chats);
-  rememberChats(state, chats);
-  saveState(state);
-  const t = buildTriage(chats, { now, windowDays, state, contacts, includeAutomated: flags.all === true, finalize: false });
-  // Look inside the chats whose preview says too little. A few at a time, to stay quick.
-  const queue = t.people.filter(wantsHistory).slice(0, 150);
-  await Promise.all(Array.from({ length: 8 }, async () => {
-    for (let r = queue.shift(); r; r = queue.shift()) {
-      try { applyContext(r, await listMessagesFast(r.id, { limit: 20 }), { now }); } catch { /* keep the preview */ }
-    }
-  }));
-  finalizeTriage(t, { maxPeople: Number(flags.max || 100), maxGroups: Number(flags['max-groups'] || 10) });
-  t.truncated = truncated;
-  t.contactsAvailable = contacts.available;
+  const t = await collectTriage({
+    chatsSince: async (cutoff) => {
+      const got = await listChatsSince(cutoff);
+      pruneDismissed(state, got.chats);
+      rememberChats(state, got.chats);
+      saveState(state);
+      return got;
+    },
+    contacts: loadContacts,
+    state: () => state,
+    messages: (id, limit) => listMessagesFast(id, { limit }),
+    history: (chats) => chatStats(chats, { now }),
+    strangers: () => strangerRates({ now }),
+  }, { now, windowDays, includeAutomated: flags.all === true, maxPeople: Number(flags.max || 100), maxGroups: Number(flags['max-groups'] || 10) });
   console.log(flags.json ? JSON.stringify(t, null, 1) : renderTriage(t));
 }
 
