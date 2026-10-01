@@ -2,12 +2,12 @@
 // The tables are the subset of the Beeper Companion's corpus schema this skill reads.
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
-import { emailKey, findPeople, openCorpus, personProfile, phoneDigits } from '../scripts/lib/corpus.mjs';
+import { decideSame, emailKey, findPeople, openCorpus, personProfile, phoneDigits } from '../scripts/lib/corpus.mjs';
 import { renderWho } from '../scripts/lib/render.mjs';
 
 const JO = emailKey('jopark@googlemail.com');
@@ -146,6 +146,9 @@ test('same and different record the Owner\'s answer, only with --confirmed, neve
   assert.match(yes.stdout, /Recorded: different people/);
   const rows = JSON.parse(execFileSync('/usr/bin/sqlite3', ['-json', file, 'SELECT a, b, decision FROM identity_decisions'], { encoding: 'utf8' }));
   assert.deepEqual(rows, [{ a: 'beeper:linkedin:@li_okafor', b: 'beeper:whatsapp:@wa_sam', decision: 'different' }]);
+  // The same write marks People to rebuild at the companion's next update.
+  const dirty = JSON.parse(execFileSync('/usr/bin/sqlite3', ['-json', file, "SELECT value FROM corpus_meta WHERE key = 'derived_dirty'"], { encoding: 'utf8' }));
+  assert.deepEqual(dirty, [{ value: '1' }]);
   assert.match(run(file, 'same', 'p_aa11', 'p_aa11', '--confirmed').stderr, /already the same person/);
   assert.match(run(file, 'same', 'Sam', 'p_aa11', '--confirmed').stderr, /Usage: same/);
 });
@@ -156,4 +159,13 @@ test('who reads a corpus in WAL mode whose -wal and -shm files are gone', async 
   // which macOS's sqlite3 cannot open read-only.
   execFileSync('/usr/bin/sqlite3', [file, 'PRAGMA journal_mode = WAL; SELECT count(*) FROM people;']);
   assert.match(run(file, 'who', 'Sam Rivera').stdout, /^WHO · Sam Rivera/);
+});
+
+test('a Corpus deleted from the menu bar is never created again by a read or an answer', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'ba-deleted-'));
+  const file = join(dir, 'corpus.db');
+  await assert.rejects(findPeople(file, 'Sam Rivera'));
+  await assert.rejects(decideSame(file, 'p_aa11', 'p_bb22', 'same'), /unable to open/);
+  assert.ok(!existsSync(file));
+  assert.deepEqual(readdirSync(dir), []);
 });

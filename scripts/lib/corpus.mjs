@@ -20,16 +20,20 @@ function run(args) {
   });
 }
 
+// A path as an SQLite URI. Only %, ?, and # would change its meaning.
+const uri = (file, mode) => `file:${String(file).replace(/[%?#]/g, encodeURIComponent)}?mode=${mode}`;
+
 // Read-only first. macOS's sqlite3 cannot open a WAL database read-only once its -wal and
-// -shm files are gone, so a refused open is tried again as an ordinary one, which creates
-// them, runs only this SELECT, and removes them.
+// -shm files are gone, so a refused open is tried again read-write, which creates them,
+// runs only this SELECT, and removes them. Writes and that retry open with mode=rw, which
+// never creates the database: a Corpus deleted from the menu bar stays deleted.
 async function query(file, sql, { write = false } = {}) {
-  if (write) return run(['-json', '-cmd', '.timeout 5000', file, sql]);
+  if (write) return run(['-json', '-cmd', '.timeout 5000', uri(file, 'rw'), sql]);
   // Reads run side by side, and one may be recovering the file while another opens it, so
   // each waits for a lock instead of failing at once.
-  try { return await run(['-readonly', '-json', '-cmd', '.timeout 5000', `file:${file}?mode=ro`, sql]); } catch (e) {
+  try { return await run(['-readonly', '-json', '-cmd', '.timeout 5000', uri(file, 'ro'), sql]); } catch (e) {
     if (!/unable to open database file/i.test(e.message)) throw e;
-    return run(['-json', '-cmd', '.timeout 5000', file, sql]);
+    return run(['-json', '-cmd', '.timeout 5000', uri(file, 'rw'), sql]);
   }
 }
 const str = (s) => `'${String(s).replace(/'/g, "''")}'`;
@@ -118,8 +122,8 @@ export async function personProfile(file, id) {
 }
 
 // The Owner's answer about whether two People are one person. Stored on one member of each,
-// as the companion stores it, so it survives any change of id. It takes effect at the
-// corpus's next rebuild.
+// as the companion stores it, so it survives any change of id. The same write marks People
+// to rebuild, which the companion does at its next update, within 15 minutes.
 export async function decideSame(file, a, b, decision) {
   if (decision !== 'same' && decision !== 'different') throw new Error('decision must be same or different');
   const rep = async (id) => {
@@ -131,7 +135,10 @@ export async function decideSame(file, a, b, decision) {
   if (!x || !y) return { ok: false, reason: 'One of those people is not in the corpus.' };
   if (x === y) return { ok: false, reason: 'Those are already the same person.' };
   const [lo, hi] = x < y ? [x, y] : [y, x];
-  await query(file, `INSERT INTO identity_decisions (a, b, decision, decided_at) VALUES (${str(lo)}, ${str(hi)}, ${str(decision)}, ${str(new Date().toISOString())})
-    ON CONFLICT (a, b) DO UPDATE SET decision = excluded.decision, decided_at = excluded.decided_at`, { write: true });
+  await query(file, `BEGIN IMMEDIATE;
+    INSERT INTO identity_decisions (a, b, decision, decided_at) VALUES (${str(lo)}, ${str(hi)}, ${str(decision)}, ${str(new Date().toISOString())})
+      ON CONFLICT (a, b) DO UPDATE SET decision = excluded.decision, decided_at = excluded.decided_at;
+    INSERT INTO corpus_meta (key, value) VALUES ('derived_dirty', '1') ON CONFLICT (key) DO UPDATE SET value = excluded.value;
+    COMMIT;`, { write: true });
   return { ok: true };
 }
