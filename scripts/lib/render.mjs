@@ -257,3 +257,42 @@ export function renderPending(p, { now = Date.now(), context = 10 } = {}) {
   if (left.length) out.push(`Left out: ${left.join(' · ')}`);
   return out.join('\n');
 }
+
+// ---- who: one Person from the companion's corpus ----
+const NETWORK_NAMES = { imessage: 'iMessage', whatsapp: 'WhatsApp', instagram: 'Instagram', facebook: 'Messenger', linkedin: 'LinkedIn', x: 'X', signal: 'Signal', telegram: 'Telegram', beeper: 'Beeper' };
+export const networkName = (n) => NETWORK_NAMES[n] || n;
+const day = (ms) => new Date(ms).toISOString().slice(0, 10);
+function span(s) {
+  if (s == null) return '-';
+  if (s < 90) return `${s}s`;
+  if (s < 5400) return `${Math.round(s / 60)}m`;
+  if (s < 172_800) return `${Math.round(s / 3600)}h`;
+  return `${Math.round(s / 86_400)}d`;
+}
+
+// chatRef maps a Beeper chat ID to the short reference other commands take.
+export function renderWho(p, { now = Date.now(), builtAt = null, chatRef = (id) => id } = {}) {
+  const out = [`WHO · ${p.display_name || '(no name)'}${p.state === 'conflicted' ? ' · identity conflict' : ''}`];
+  for (const c of p.chats.slice(0, 15)) {
+    const id = c.beeper_chat_id || (c.chat_key.startsWith('imessage:') ? null : c.chat_key);
+    const ref = id ? chatRef(id) : '(not linked to Beeper yet, use find)';
+    const last = c.last_at ? `last ${age(now - c.last_at)} ago` : 'no messages';
+    out.push(`${ref}  ${networkName(c.network)} · ${c.messages} messages · ${last}`);
+  }
+  if (p.chats.length > 15) out.push(`+${p.chats.length - 15} more chats`);
+  const s = p.stats;
+  if (s) {
+    const lastWho = s.last_from_owner ? 'you' : 'them';
+    out.push(`Messages: ${s.from_them} from them, ${s.from_owner} from you, ${s.group_from_them} from them in groups.${s.first_at ? ` First ${day(s.first_at)}, last ${age(now - s.last_at)} ago, from ${lastWho}.` : ''}`);
+    if (s.conversations) {
+      const ratio = s.initiation_ratio == null ? '-' : `${Math.round(s.initiation_ratio * 100)}%`;
+      out.push(`Conversations: ${s.conversations}, you started ${ratio}. Your reply time: median ${span(s.owner_reply_first_median_s)} (${s.owner_replied} answered, ${s.owner_unanswered} not within 48h). Theirs: ${span(s.their_reply_first_median_s)}.`);
+    }
+    out.push(`Groups: ${s.groups_listed} together, ${s.groups_active} where they wrote in the last year.`);
+    if (s.waiting_chats) out.push(`Waiting on you: ${s.waiting_chats} chat${s.waiting_chats === 1 ? '' : 's'}, since ${age(now - s.waiting_since)} ago. That is who spoke last, not whether a reply is owed.`);
+  } else out.push('No messages with this person in the corpus.');
+  for (const c of p.conflicts) out.push(`Identity conflict (${c}): evidence disagrees about who this is. Ask the Owner before relying on it.`);
+  for (const x of p.suggestions.slice(0, 5)) out.push(`Maybe the same person: ${x.other_name || '(no name)'} (${x.other}). Not joined. Ask the Owner.`);
+  if (builtAt) out.push(`From the companion's corpus, built ${age(now - Date.parse(builtAt))} ago.`);
+  return out.join('\n');
+}

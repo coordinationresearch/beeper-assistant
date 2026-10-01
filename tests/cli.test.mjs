@@ -14,7 +14,7 @@ const run = (...args) => spawnSync(process.execPath, [BA, ...args], { env, encod
 
 test('help lists every command', () => {
   const out = execFileSync(process.execPath, [BA, 'help'], { env, encoding: 'utf8' });
-  for (const c of ['check', 'mode', 'triage', 'chat', 'find', 'search', 'media', 'dismiss', 'undismiss', 'draft', 'read', 'remind', 'unremind', 'send', 'react', 'edit', 'delete', 'group', 'start', 'contact']) {
+  for (const c of ['check', 'mode', 'triage', 'chat', 'find', 'who', 'search', 'media', 'dismiss', 'undismiss', 'draft', 'read', 'remind', 'unremind', 'send', 'react', 'edit', 'delete', 'group', 'start', 'contact']) {
     assert.match(out, new RegExp(`^  ${c}\\b`, 'm'), c);
   }
 });

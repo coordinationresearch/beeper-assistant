@@ -6,8 +6,9 @@ import { homedir } from 'node:os';
 import { BeeperError, SEARCH_MEDIA, apiOnce, asList, attachmentFile, listChats, listChatsSince, listMessages, listMessagesFast, participantsOf, runBeeper, searchChats, searchMessages, showChat } from './lib/beeper.mjs';
 import { loadContacts, looksLikeEmail, looksLikePhone, normalizeEmail, normalizePhone, ownersOf, resetContacts, searchPeople } from './lib/contacts.mjs';
 import { addContact } from './lib/contacts-write.mjs';
+import { findPeople, openCorpus, personProfile } from './lib/corpus.mjs';
 import { HistoryError, historyStatus, messagesAround } from './lib/history.mjs';
-import { UNTRUSTED_NOTE, age, mediaKind, quote, renderChat, renderMedia, renderPending, renderSearch, renderTriage } from './lib/render.mjs';
+import { UNTRUSTED_NOTE, age, mediaKind, networkName, quote, renderChat, renderMedia, renderPending, renderSearch, renderTriage, renderWho } from './lib/render.mjs';
 import { appendOutbox, chatAlias, dismiss, dropFromOutbox, isChatAlias, isMessageAlias, loadState, messageAlias, pruneDismissed, readOutbox, recordDraft, recordSkip, copyMedia, pruneMedia, rememberChats, rememberMessages, saveState, savedMessage, stateDir, undismiss } from './lib/state.mjs';
 import { matchChat, outboxEntry, selectPending, stillCurrent, tidyDecision } from './lib/unattended.mjs';
 import { DEFAULT_WINDOW_DAYS, applyContext, buildTriage, chatName, clip, counterparties, draftText, finalizeTriage, handlesOf, htmlToText, isGroup, previewKind, wantsHistory } from './lib/triage.mjs';
@@ -278,6 +279,43 @@ async function cmdFind({ pos, flags }) {
   if (people.length > 1 || new Set(rows.filter((r) => r.type === 'single').map((r) => r.name)).size > 1) out.push('More than one person matches. Ask the Owner which one. Never pick for them.');
   if (!flags.all) out.push('Groups a person only belongs to are hidden. Add --all to include them.');
   console.log(out.join('\n'));
+}
+
+// One person across every network, with stats, from the Beeper Companion's corpus. Without
+// a corpus on this Mac it falls back to find, which reads live.
+async function cmdWho({ pos, flags }) {
+  const q = pos.join(' ').trim();
+  if (!q) throw new UsageError('Usage: who <name, number, email, or person id>');
+  const corpus = await openCorpus();
+  if (!corpus.ok) {
+    console.error(`No stats: ${corpus.reason}. Showing live chats instead. Stats need the Beeper Companion's corpus.`);
+    return cmdFind({ pos, flags });
+  }
+  const people = await findPeople(corpus.file, q);
+  if (!people.length) {
+    console.error('Nobody in the corpus matches. Showing live chats instead, in case the chat is newer than the corpus.');
+    return cmdFind({ pos, flags });
+  }
+  const now = Date.now();
+  if (people.length > 1) {
+    const rows = people.map((p) => ({ id: p.person_id, name: p.display_name, messages: p.messages, networks: JSON.parse(p.networks || '[]') }));
+    if (flags.json) { console.log(JSON.stringify({ query: q, people: rows }, null, 1)); return; }
+    const out = [`WHO ${quote(q)} · ${rows.length} people`];
+    for (const r of rows) out.push(`${r.id}  ${r.name || '(no name)'} · ${r.networks.map(networkName).join(', ') || 'no chats'} · ${r.messages} messages`);
+    out.push('More than one person matches. Ask the Owner which one. Never pick for them. Then run who with their id.');
+    console.log(out.join('\n'));
+    return;
+  }
+  const p = await personProfile(corpus.file, people[0].person_id);
+  const ids = p.chats.map((c) => c.beeper_chat_id || (c.chat_key.startsWith('imessage:') ? null : c.chat_key)).filter(Boolean);
+  const state = loadState();
+  rememberChats(state, ids.map((id) => ({ id })));
+  saveState(state);
+  if (flags.json) {
+    console.log(JSON.stringify({ ...p, chats: p.chats.map((c) => ({ ...c, ref: c.beeper_chat_id || !c.chat_key.startsWith('imessage:') ? chatAlias(c.beeper_chat_id || c.chat_key) : null })), builtAt: corpus.builtAt }, null, 1));
+    return;
+  }
+  console.log(renderWho(p, { now, builtAt: corpus.builtAt, chatRef: chatAlias }));
 }
 
 async function cmdSearch({ pos, flags }) {
@@ -763,6 +801,8 @@ Read
   chat <chat> [--limit 20]            recent messages in one chat
   chat <chat> --around <message>      older messages around one, such as a search hit
   find <name | number | email>        every chat for a person. Add --all for groups they are in
+  who <name | number | email>         one person on every network, with message counts, reply times, and
+                                      who starts conversations. Needs the Beeper Companion's corpus; without it, runs find
   search <words> [--chat <chat>] [--from me|them] [--media image] [--days N] [--max 20]
                                       messages that contain these words, across all chats
   media <chat> <message>              put a message's photos and files on this Mac, and print where
@@ -796,7 +836,7 @@ Write, needs --confirmed after the Owner says yes
 
 <chat> is a reference like c1a2b3c4d from triage or find, or an exact Beeper chat ID.
 <message> is a reference like m1a2b3c4d from the chat command.
-Names and titles are never accepted as <chat>. Add --json to triage, chat, find, search, media, and pending.
+Names and titles are never accepted as <chat>. Add --json to triage, chat, find, who, search, media, and pending.
 --text - reads the message from stdin.
 Set BEEPER_ASSISTANT_MODE=drafts to allow reading and drafts only, or readonly to allow reading only.
 A file named mode in the state folder does the same, and the stricter of the two wins.`;
@@ -807,8 +847,8 @@ A file named mode in the state folder does the same, and the stricter of the two
 //   drafts    for runs with no person in the turn: read, and save drafts. Nothing anyone else can see
 //   readonly  read only
 const ALLOWED = {
-  readonly: new Set(['check', 'mode', 'triage', 'chat', 'find', 'search', 'media', 'pending', 'outbox', 'dismiss', 'undismiss']),
-  drafts: new Set(['check', 'mode', 'triage', 'chat', 'find', 'search', 'media', 'pending', 'outbox', 'draft', 'skip', 'tidy', 'place']),
+  readonly: new Set(['check', 'mode', 'triage', 'chat', 'find', 'who', 'search', 'media', 'pending', 'outbox', 'dismiss', 'undismiss']),
+  drafts: new Set(['check', 'mode', 'triage', 'chat', 'find', 'who', 'search', 'media', 'pending', 'outbox', 'draft', 'skip', 'tidy', 'place']),
 };
 const RANK = { readonly: 0, drafts: 1, full: 2 };
 function modeFromEnv() {
@@ -833,7 +873,7 @@ function currentMode() {
   return RANK[e] <= RANK[f] ? e : f;
 }
 
-const COMMANDS = { check: cmdCheck, triage: cmdTriage, chat: cmdChat, find: cmdFind, search: cmdSearch, media: cmdMedia, dismiss: cmdDismiss, undismiss: cmdUndismiss, draft: cmdDraft, send: cmdSend, read: cmdRead, react: cmdReact, remind: cmdRemind, unremind: cmdUnremind, edit: cmdEdit, delete: cmdDelete, group: cmdGroup, start: cmdStart, contact: cmdContact, pending: cmdPending, skip: cmdSkip, tidy: cmdTidy, outbox: cmdOutbox, place: cmdPlace, mode: cmdMode };
+const COMMANDS = { check: cmdCheck, triage: cmdTriage, chat: cmdChat, find: cmdFind, who: cmdWho, search: cmdSearch, media: cmdMedia, dismiss: cmdDismiss, undismiss: cmdUndismiss, draft: cmdDraft, send: cmdSend, read: cmdRead, react: cmdReact, remind: cmdRemind, unremind: cmdUnremind, edit: cmdEdit, delete: cmdDelete, group: cmdGroup, start: cmdStart, contact: cmdContact, pending: cmdPending, skip: cmdSkip, tidy: cmdTidy, outbox: cmdOutbox, place: cmdPlace, mode: cmdMode };
 
 async function main() {
   const [name, ...rest] = process.argv.slice(2);

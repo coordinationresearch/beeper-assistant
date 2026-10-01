@@ -103,6 +103,11 @@ Run `ba find "<name, number, or email>"`. It searches the Mac's Contacts and Bee
 - One person on several networks: use the network they wrote on most recently, unless the Owner names one.
 - Nothing found: say so. When the Owner wants to write to someone with no chat yet, see `start` below.
 
+For "how often do I talk to Sam", "who usually reaches out", or "how long do I take to answer her", run `ba who "<name, number, or email>"`. With the Beeper Companion's corpus on this Mac it shows one person across every network: message counts both ways, first and last contact, reply times, who starts conversations, shared groups, and which chats are waiting on the Owner. Without the corpus it says so and runs `find`.
+
+- "Maybe the same person" and "identity conflict" lines mean the evidence is not settled. Ask the Owner. Never treat two people as one on your own.
+- "Waiting on you" is who spoke last, not whether a reply is owed.
+
 ## Search messages
 
 For "what did Sam say about the lease" or "find the address someone sent me", run `ba search "<words>"`.
@@ -149,7 +154,7 @@ The number is taken from the chat, so never type one. `ba` refuses when the numb
 | `ba group --from <chat> --from <chat>` | new group from the people in one-to-one chats | yes |
 | `ba start --to <handle> --account <account>` | open a chat with someone new, sends nothing | yes |
 
-Add `--json` to `triage`, `chat`, `find`, `search`, `media`, and `pending` for structured output.
+Add `--json` to `triage`, `chat`, `find`, `who`, `search`, `media`, and `pending` for structured output.
 
 ## Runs with no person in the turn
 
