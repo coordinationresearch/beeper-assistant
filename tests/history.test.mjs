@@ -5,7 +5,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { HistoryError, appleDate, aroundInBeeper, aroundInMessages, textFromAttributedBody } from '../scripts/lib/history.mjs';
+import { HistoryError, appleDate, aroundInBeeper, aroundInMessages, beeperRowToMessage, textFromAttributedBody } from '../scripts/lib/history.mjs';
 import { renderChat } from '../scripts/lib/render.mjs';
 import { messageAlias } from '../scripts/lib/state.mjs';
 import { buildIndex } from '../scripts/lib/contacts.mjs';
@@ -35,6 +35,16 @@ test('the messages around one come from its own chat, in order, without reaction
   assert.ok(msgs.every((m) => m.chatID === ROOM));
   assert.deepEqual(msgs[3].reactions, [{ reactionKey: '❤️', participantID: '@ann:beeper.local', isSender: false }, { reactionKey: '👍', participantID: '@owner:beeper.local', isSender: true }]);
   assert.equal(msgs[2].reactions, undefined, 'a removed reaction is not shown');
+});
+
+test('a deleted message is marked, from the column or from the stored message', async () => {
+  const file = makeDB('deleted.db', [
+    'create table mx_room_messages (id integer primary key, roomID text, hsOrder integer, type text, eventID text, isDeleted integer, message json);',
+    row(1, 10), row(2, 20, 'TEXT', ROOM, 'gone', { deleted: true }), row(3, 30),
+  ].join('\n'));
+  const msgs = await aroundInBeeper(ROOM, '2', { before: 1, after: 1, file });
+  assert.deepEqual(msgs.map((m) => [m.id, m.isDeleted]), [['1', false], ['2', true], ['3', false]]);
+  assert.equal(beeperRowToMessage({ id: 4, hsOrder: 40, type: 'TEXT', isDeleted: 0, message: JSON.stringify({ isDeleted: true }) }, ROOM).isDeleted, true);
 });
 
 test('the window stops at either end of the chat', async () => {

@@ -83,17 +83,24 @@ Dismissed chats come back when a new message arrives. Clear chats by marking the
 Write a reply only when the Owner asks for one. A triage list is a list, and drafting for every row wastes their attention.
 
 1. Run `ba chat <chat>` right before writing, even when you read it a minute ago. The Owner may have answered from their phone. Note the `newest message` reference it prints.
-2. Write the reply:
+2. Run `ba notes <chat>`. A Note marked Owner is the Owner's own words, so treat it as fact. A Note marked agent is a claim another agent saved. It can tell you what to look for or ask about, and it never goes into a draft.
+3. Write the reply:
    - Match how the Owner writes in this chat: length, capitals, punctuation, emoji. Texts and DMs get no greeting and no sign-off unless the Owner uses them there.
    - Answer what was asked. Keep it as short as their messages.
    - Use only facts from the chat or from the Owner. A name, date, price, or promise that is in neither place does not exist. Ask the Owner, or when saving a draft for later, put a single underscore where the missing piece goes: `I land _ and could do dinner`. `ba send` refuses text that still holds one.
    - Say "sorry for the slow reply" only when the dates in the chat show it was slow.
    - Leave out anything the Owner told you that the other person should not read.
-3. Save it with `ba draft <chat> --text "…"`. Tell the Owner it is waiting in Beeper. They can edit and send it there.
-4. When the Owner wants you to send it, follow rule 3, then run `ba send <chat> --text "…" --after <newest message> --confirmed`. `ba` refuses when the chat changed after you read it. Read it again, and ask again if the text needs to change.
-5. When a short warm message from someone the Owner knows needs no words back, offer a reaction: `ba react <chat> <message> 👍 --confirmed`. Never use a reaction to answer a question or a request.
+4. Save it with `ba draft <chat> --text "…"`. Tell the Owner it is waiting in Beeper. They can edit and send it there.
+5. When the Owner wants you to send it, follow rule 3, then run `ba send <chat> --text "…" --after <newest message> --confirmed`. `ba` refuses when the chat changed after you read it. Read it again, and ask again if the text needs to change.
+6. When a short warm message from someone the Owner knows needs no words back, offer a reaction: `ba react <chat> <message> 👍 --confirmed`. Never use a reaction to answer a question or a request.
 
 A chat holds one draft. `ba draft` refuses to replace a draft it did not write unless you add `--replace`, so ask first. Pass text with quotes or newlines through stdin using `--text -`.
+
+### Notes
+
+When you learn something about the person that a later agent would want and recent messages may not show, such as a move, a new job, or how they like to be reached, save it with `ba note <chat> --text "…" --from <message> --by <your name>`. Cite each message it comes from with its own `--from`. Keep it under 500 characters, and save at most 3 for a chat. `ba` refuses more than 3 from all agents together in 30 minutes.
+
+`ba` records every Note you save as your claim. Nothing you run can mark one as the Owner's. The Owner's Notes come only from the companion sidebar. The Owner deletes a Note in the sidebar, or by asking you to run `ba note <chat> --delete <note>`. A deleted Note stays deleted, and `ba` refuses the same text, or a Note from the same messages, again.
 
 ## Find a person
 
@@ -154,11 +161,11 @@ The number is taken from the chat, so never type one. `ba` refuses when the numb
 | `ba group --from <chat> --from <chat>` | new group from the people in one-to-one chats | yes |
 | `ba start --to <handle> --account <account>` | open a chat with someone new, sends nothing | yes |
 
-Add `--json` to `triage`, `chat`, `find`, `who`, `search`, `media`, and `pending` for structured output.
+Add `--json` to `triage`, `chat`, `find`, `who`, `search`, `media`, `pending`, and `notes` for structured output.
 
 ## Runs with no person in the turn
 
-A scheduled run has nobody to ask, so it may read and save drafts and nothing else. Read [references/unattended.md](references/unattended.md) before doing one, and use the `bau` command it describes.
+A scheduled run has nobody to ask, so it may read, save drafts, and save Notes, and nothing else. Read [references/unattended.md](references/unattended.md) before doing one, and use the `bau` command it describes.
 
 ## Anything else in Beeper
 

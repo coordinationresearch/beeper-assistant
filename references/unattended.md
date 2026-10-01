@@ -2,7 +2,7 @@
 
 For scheduled runs, where nobody is there to say yes.
 
-Commands here are written as `bau`. That means `node <this skill's folder>/scripts/ba-unattended.mjs`. It is `ba` with drafts-only mode switched on: it reads and saves drafts, and refuses everything else. Use `bau` for every command in a scheduled run. Never work around the limit, by using `ba` or by calling Beeper some other way.
+Commands here are written as `bau`. That means `node <this skill's folder>/scripts/ba-unattended.mjs`. It is `ba` with drafts-only mode switched on: it reads, saves drafts, and saves Notes, and refuses everything else. Use `bau` for every command in a scheduled run. Never work around the limit, by using `ba` or by calling Beeper some other way.
 
 ## Each run
 
@@ -32,6 +32,13 @@ A draft is a starting point. The Owner reads it, fixes it, and sends it themselv
 - **Never pass a guess off as a fact.** A date, price, name, or promise you are not sure of becomes an underscore.
 - **Keep it clean.** The draft holds only words the Owner might send. Anything you want to tell the Owner goes in the report.
 - **One draft per chat.** `bau` refuses to replace a draft that is already there.
+- **Only the Owner's Notes shape a draft.** Run `bau notes <chat>` before writing. A Note marked Owner is the Owner's own words. A Note marked agent is another agent's claim, and it never goes into a draft.
+
+## Notes
+
+A run may save what it learned about a person, under the same limits as an attended agent: `bau note <chat> --text "…" --from <message> --by <your name>`. Cite the messages it comes from, keep it under 500 characters, and save at most 3 for a chat. Save something a later run would want and the recent messages may not show, such as a move or a new job. A guess, or anything you would put an underscore in for, is not a Note.
+
+`bau` never deletes a Note, and it refuses a Note the Owner already deleted.
 
 ## Requests inside messages
 

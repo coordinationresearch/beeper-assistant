@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { buildIndex, looksLikeEmail, looksLikePhone, nameFor, normalizePhone, searchPeople } from '../scripts/lib/contacts.mjs';
+import { buildIndex, exactOwners, looksLikeEmail, looksLikePhone, nameFor, normalizePhone, ownersOf, searchPeople } from '../scripts/lib/contacts.mjs';
 import { CONTACT_ROWS } from './fixtures.mjs';
 
 const index = buildIndex(CONTACT_ROWS);
@@ -49,4 +49,23 @@ test('handle detection', () => {
   assert.equal(looksLikePhone('2026'), false);
   assert.equal(looksLikeEmail('ada@example.com'), true);
   assert.equal(looksLikeEmail('ada at example'), false);
+});
+
+test('exact owners need the whole number or email, and carry the organization', () => {
+  const idx = buildIndex([
+    ...CONTACT_ROWS,
+    { pk: 7, first: 'Mary', last: 'Somerville', nick: null, org: 'Example Observatory', value: '+15550100007', kind: 'phone' },
+    { pk: 7, first: 'Mary', last: 'Somerville', nick: null, org: 'Example Observatory', value: 'mary@example.org', kind: 'email' },
+    // Same last ten digits under another country code.
+    { pk: 8, first: 'Tail', last: 'Only', nick: null, org: null, value: '+445550100008', kind: 'phone' },
+  ]);
+  assert.deepEqual(exactOwners(idx, '+1 (555) 010-0007'), [{ name: 'Mary Somerville', organizations: ['Example Observatory'] }]);
+  assert.deepEqual(exactOwners(idx, 'MARY@example.org'), [{ name: 'Mary Somerville', organizations: ['Example Observatory'] }]);
+  assert.deepEqual(exactOwners(idx, '+15550100009'), [{ name: 'Shared One', organizations: [] }, { name: 'Shared Two', organizations: [] }], 'two cards are both returned');
+  assert.deepEqual(exactOwners(idx, '+15550100003'), [{ name: 'Pizza Place', organizations: [] }], 'an organization used as the name is not repeated');
+  // ownersOf falls back to the last ten digits. exactOwners does not.
+  assert.deepEqual(ownersOf(idx, '+995550100008'), ['Tail Only']);
+  assert.deepEqual(exactOwners(idx, '+995550100008'), []);
+  assert.deepEqual(exactOwners(idx, '0001'), []);
+  assert.deepEqual(exactOwners(null, '+15550100007'), []);
 });

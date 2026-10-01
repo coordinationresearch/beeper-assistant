@@ -180,4 +180,7 @@ test('the unattended entry point is locked to drafts-only, whatever the environm
   assert.match(go({ BEEPER_ASSISTANT_MODE: 'full' }, 'send', 'c00000000', '--text', 'x', '--confirmed').stderr, /Drafts-only mode is on/);
   assert.match(go({ BEEPER_ASSISTANT_MODE: 'readonly' }, 'draft', 'c00000000', '--text', 'x', '--for', 'm00000000').stderr, /Read-only mode is on/);
   assert.match(go({}, 'help').stdout, /Runs with no person in the turn/);
+  // Notes may be read and saved, never deleted.
+  assert.match(go({}, 'note', 'c00000000', '--text', 'x').stderr, /brew install/);
+  assert.match(go({ BEEPER_ASSISTANT_MODE: 'full' }, 'note', 'c00000000', '--delete', 'n00000000').stderr, /Drafts-only mode is on, so the Note was not deleted/);
 });

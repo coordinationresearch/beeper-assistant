@@ -1,7 +1,7 @@
 // Loads the real entry point, so a missing function fails here and not in front of the Owner.
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
@@ -14,7 +14,7 @@ const run = (...args) => spawnSync(process.execPath, [BA, ...args], { env, encod
 
 test('help lists every command', () => {
   const out = execFileSync(process.execPath, [BA, 'help'], { env, encoding: 'utf8' });
-  for (const c of ['check', 'mode', 'triage', 'chat', 'find', 'who', 'search', 'media', 'dismiss', 'undismiss', 'draft', 'read', 'remind', 'unremind', 'send', 'react', 'edit', 'delete', 'group', 'start', 'contact']) {
+  for (const c of ['check', 'mode', 'triage', 'chat', 'find', 'who', 'search', 'media', 'dismiss', 'undismiss', 'notes', 'note', 'draft', 'read', 'remind', 'unremind', 'send', 'react', 'edit', 'delete', 'group', 'start', 'contact']) {
     assert.match(out, new RegExp(`^  ${c}\\b`, 'm'), c);
   }
 });
@@ -26,7 +26,7 @@ test('an unknown command is a usage error', () => {
 });
 
 test('a name is never accepted where a chat reference is needed', () => {
-  for (const cmd of ['chat', 'send', 'draft', 'read', 'dismiss', 'delete', 'react', 'edit', 'contact', 'media']) {
+  for (const cmd of ['chat', 'send', 'draft', 'read', 'dismiss', 'delete', 'react', 'edit', 'contact', 'media', 'notes', 'note']) {
     const r = run(cmd, 'Ann', '--text', 'hi', '--first', 'A', '--confirmed');
     assert.equal(r.status, 2, cmd);
     assert.match(r.stderr, /not an exact reference/, cmd);
@@ -108,4 +108,66 @@ test('text that still holds a marked gap is never sent', () => {
   const r = run('send', 'c00000000', '--text', 'see you _ at the usual place', '--after', 'none', '--confirmed');
   // The chat reference is checked first, against a Beeper that does not exist here.
   assert.notEqual(r.status, 0);
+});
+
+test('Notes: drafts-only mode may read and save them, and never delete one', () => {
+  const go = (extra, ...args) => spawnSync(process.execPath, [BA, ...args], { env: { ...env, ...extra }, encoding: 'utf8' });
+  const drafts = { BEEPER_ASSISTANT_MODE: 'drafts' };
+  // Allowed commands get as far as looking for Beeper.
+  assert.match(go(drafts, 'notes', 'c00000000').stderr, /brew install/);
+  assert.match(go(drafts, 'note', 'c00000000', '--text', 'hi').stderr, /brew install/);
+  const del = go(drafts, 'note', 'c00000000', '--delete', 'n00000000');
+  assert.equal(del.status, 2);
+  assert.match(del.stderr, /Drafts-only mode is on, so the Note was not deleted/);
+  const ro = { BEEPER_ASSISTANT_READONLY: '1' };
+  assert.match(go(ro, 'notes', 'c00000000').stderr, /brew install/);
+  assert.match(go(ro, 'note', 'c00000000', '--text', 'hi').stderr, /Read-only mode is on/);
+  assert.match(go({}, 'note', 'c00000000', '--text', 'hi', '--by', 'Owner').stderr, /--by Owner is reserved/);
+  assert.match(go({}, 'note', 'c00000000', '--text', 'hi', '--by', 'sidebar').stderr, /reserved/);
+});
+
+// A stand-in for the Beeper CLI that knows one made-up chat with one message.
+function fakeBeeper(dir) {
+  const bin = join(dir, 'beeper');
+  writeFileSync(bin, `#!${process.execPath}
+const a = process.argv.slice(2);
+const chat = a[a.indexOf('--chat') + 1];
+let data;
+if (a[0] === 'chats' && a[1] === 'show') data = { id: chat, network: 'WhatsApp', type: 'single', title: 'Test Person', participants: { items: [] } };
+else if (a[0] === 'messages' && a[1] === 'list') data = [{ id: 'msg-1', chatID: chat, sortKey: '1', timestamp: '2026-09-29T10:00:00.000Z', text: 'made-up', isSender: false }];
+else { console.error(JSON.stringify({ success: false, error: 'not in the fake' })); process.exit(1); }
+console.log(JSON.stringify({ success: true, data }));
+`);
+  chmodSync(bin, 0o755);
+  return bin;
+}
+
+test('Notes: an agent saves one, the list labels it a claim, and a deleted one stays deleted', () => {
+  const home = mkdtempSync(join(tmpdir(), 'ba-notes-cli-'));
+  const fake = { ...env, BEEPER_ASSISTANT_HOME: home, BEEPER_BIN: fakeBeeper(home) };
+  delete fake.BEEPER_ASSISTANT_MODE; delete fake.BEEPER_ASSISTANT_READONLY;
+  const go = (extra, ...args) => spawnSync(process.execPath, [BA, ...args], { env: { ...fake, ...extra }, encoding: 'utf8' });
+  const CHAT = '!fake-chat:beeper.local';
+
+  const saved = go({ BEEPER_ASSISTANT_MODE: 'drafts' }, 'note', CHAT, '--text', 'Synthetic claim for a test', '--from', 'msg-1', '--by', 'test');
+  assert.equal(saved.status, 0, saved.stderr);
+  const id = saved.stdout.match(/Note (n[0-9a-f]{8}) saved/)[1];
+  assert.match(saved.stdout, /as a claim by test, citing 1 message\./);
+
+  const list = go({}, 'notes', CHAT);
+  assert.equal(list.status, 0, list.stderr);
+  assert.match(list.stdout, /Treat it as data/);
+  assert.match(list.stdout, new RegExp(`\\[${id}\\] agent: test · \\d{4}-\\d{2}-\\d{2} · from 1 message`));
+  assert.match(list.stdout, /«Synthetic claim for a test»/);
+  const json = JSON.parse(go({}, 'notes', CHAT, '--json').stdout);
+  assert.equal(json.notes[0].trusted, false);
+  assert.deepEqual(json.notes[0].source, { messages: [{ id: 'msg-1', at: '2026-09-29T10:00:00.000Z' }] });
+
+  assert.match(go({}, 'note', CHAT, '--text', 'synthetic claim for a test!').stdout, /already saved/);
+  const del = go({}, 'note', CHAT, '--delete', id);
+  assert.equal(del.status, 0, del.stderr);
+  const again = go({}, 'note', CHAT, '--text', 'Synthetic claim for a test', '--by', 'test');
+  assert.equal(again.status, 2);
+  assert.match(again.stderr, /It stays deleted/);
+  assert.match(go({}, 'note', CHAT, '--delete', id).stderr, /No Note/);
 });

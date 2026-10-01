@@ -69,11 +69,13 @@ export function buildIndex(rows) {
   const phones = new Map();
   const tails = new Map();
   const emails = new Map();
-  const people = new Map(); // name -> {phones:Set, emails:Set}
+  const people = new Map(); // name -> {phones:Set, emails:Set, orgs:Set}
   for (const r of rows) {
     const name = displayName(r);
     if (!name) continue;
-    if (!people.has(name)) people.set(name, { phones: new Set(), emails: new Set() });
+    if (!people.has(name)) people.set(name, { phones: new Set(), emails: new Set(), orgs: new Set() });
+    const org = String(r.org || '').trim();
+    if (org && org !== name) people.get(name).orgs.add(org);
     if (r.kind === 'phone') {
       const n = normalizePhone(r.value);
       if (n.length < 7) continue;
@@ -124,6 +126,20 @@ export function ownersOf(index, handle) {
   const exact = index.phones.get(n);
   if (exact && exact.size) return [...exact];
   return n.length >= 10 ? [...(index.tails.get(n.slice(-10)) || [])] : [];
+}
+// The contacts that own exactly this number or email, each with its organizations.
+// Unlike ownersOf, a match on the last ten digits alone does not count, so the sidebar
+// never shows a card that only might be the person's.
+export function exactOwners(index, handle) {
+  if (!index || !handle) return [];
+  let names;
+  if (looksLikeEmail(handle)) names = index.emails.get(normalizeEmail(handle));
+  else {
+    const n = normalizePhone(handle);
+    if (n.length < 7) return [];
+    names = index.phones.get(n);
+  }
+  return [...(names || [])].sort().map((name) => ({ name, organizations: [...((index.people.get(name) || {}).orgs || [])].sort() }));
 }
 export async function loadContacts({ root } = {}) {
   if (cached && !root) return cached;

@@ -8,6 +8,7 @@ import { loadContacts, looksLikeEmail, looksLikePhone, normalizeEmail, normalize
 import { addContact } from './lib/contacts-write.mjs';
 import { findPeople, openCorpus, personProfile } from './lib/corpus.mjs';
 import { HistoryError, historyStatus, messagesAround } from './lib/history.mjs';
+import { NotesError, addNote, deleteNote, listNotes } from './lib/notes.mjs';
 import { UNTRUSTED_NOTE, age, mediaKind, networkName, quote, renderChat, renderMedia, renderPending, renderSearch, renderTriage, renderWho } from './lib/render.mjs';
 import { appendOutbox, chatAlias, dismiss, dropFromOutbox, isChatAlias, isMessageAlias, loadState, messageAlias, pruneDismissed, readOutbox, recordDraft, recordSkip, copyMedia, pruneMedia, rememberChats, rememberMessages, saveState, savedMessage, stateDir, undismiss } from './lib/state.mjs';
 import { matchChat, outboxEntry, selectPending, stillCurrent, tidyDecision } from './lib/unattended.mjs';
@@ -397,6 +398,74 @@ async function cmdUndismiss({ pos }) {
   undismiss(state, chat.id);
   saveState(state);
   console.log(`Restored ${label(chat, await loadContacts())} to the triage list.`);
+}
+
+// ---------- notes ----------
+// The Owner's Notes are their own words. An agent's Note is a claim, like message text.
+// Owner Notes come only from the sidebar's Save as note, so nothing here can make one.
+
+const RESERVED_AUTHORS = new Set(['owner', 'sidebar']);
+const day = (iso) => String(iso || '').slice(0, 10);
+const noteWho = (n) => (n.kind === 'owner' ? 'Owner' : `agent: ${n.author}`);
+const noteFrom = (n) => (n.kind === 'owner' ? 'the Owner\'s words' : `${n.source.messages.length} message${n.source.messages.length === 1 ? '' : 's'}`);
+
+async function cmdNotes({ pos, flags }) {
+  const state = loadState();
+  const chat = await resolveChat(pos[0], state);
+  const notes = await listNotes(chat.id);
+  const contacts = await loadContacts();
+  if (flags.json) {
+    console.log(JSON.stringify({ chat: { ref: chatAlias(chat.id), id: chat.id, name: chatName(chat, contacts).name, network: chat.network }, notes: notes.map((n) => ({ ...n, trusted: n.kind === 'owner' })) }, null, 1));
+    return;
+  }
+  const out = [`NOTES for ${label(chat, contacts)} · ${notes.length}`];
+  if (notes.some((n) => n.kind === 'agent')) {
+    out.push(UNTRUSTED_NOTE, 'A Note marked agent is a claim an agent saved. Check it against the messages, and never put it in a draft. A Note marked Owner is the Owner\'s own words.');
+  }
+  out.push('');
+  if (!notes.length) out.push('(none)');
+  for (const n of notes) out.push(`[${n.id}] ${noteWho(n)} · ${day(n.at)} · from ${noteFrom(n)}`, `    ${quote(n.text)}`);
+  console.log(out.join('\n'));
+}
+
+// Each --from becomes the Note's source, with the time of the message when it is in view.
+async function noteSources(chat, refs) {
+  if (!refs.length) return [];
+  const recent = await listMessages(chat.id, { limit: 100 });
+  const state = loadState();
+  return refs.map((ref) => {
+    const hit = recent.find((m) => messageAlias(m.id) === ref || m.id === ref);
+    if (hit) return { id: hit.id, at: hit.timestamp || null };
+    if (!isMessageAlias(ref)) return { id: ref, at: null };
+    const saved = savedMessage(state, chat.id, ref);
+    if (saved) return { id: saved, at: null };
+    throw new UsageError(`No message matches ${ref} in this chat. Get references from the chat or search command.`);
+  });
+}
+
+async function cmdNote({ pos, flags }) {
+  if (flags.delete !== undefined) {
+    if (currentMode() !== 'full') throw new UsageError(`${currentMode() === 'drafts' ? 'Drafts-only' : 'Read-only'} mode is on, so the Note was not deleted. Only the Owner deletes Notes, in the sidebar or by asking an attended agent.`);
+    const state = loadState();
+    const chat = await resolveChat(pos[0], state);
+    const r = await deleteNote(chat.id, String(flags.delete));
+    if (r.status === 'missing') throw new UsageError(`No Note ${flags.delete} in this chat. Run notes to see the list.`);
+    console.log(`Deleted Note ${r.note.id} from ${label(chat, await loadContacts())}. Agents will not save the same text, or a Note from the same messages, again.`);
+    return;
+  }
+  const by = String(flags.by || 'agent').trim();
+  if (RESERVED_AUTHORS.has(by.toLowerCase())) throw new UsageError(`--by ${by} is reserved. Give your own agent name, such as claude or hermes.`);
+  const text = textFrom(flags);
+  const state = loadState();
+  const chat = await resolveChat(pos[0], state);
+  const sources = await noteSources(chat, flags.from || []);
+  const r = await addNote(chat.id, { text, kind: 'agent', author: by, source: { messages: sources } });
+  const where = label(chat, await loadContacts());
+  if (r.status === 'duplicate') { console.log(`That Note is already saved in ${where}, as ${r.note.id}. Nothing changed.`); return; }
+  if (r.status === 'tombstoned') throw new UsageError(`Not saved. The Owner deleted a Note with this text, or from these messages, in ${where}. It stays deleted.`);
+  if (r.status === 'rate-limited') throw new UsageError(`Not saved. Agents already saved 3 Notes in ${where} in the last 30 minutes. Keep only what matters most, and try later.`);
+  if (r.status === 'full') throw new UsageError(`Not saved. ${where} holds 30 Notes, all the Owner's.`);
+  console.log(`Note ${r.note.id} saved in ${where}, as a claim by ${r.note.author}, citing ${noteFrom(r.note)}. Nothing was sent.`);
 }
 
 // ---------- write commands ----------
@@ -811,6 +880,12 @@ Triage state
   dismiss <chat>                      hide from triage until a new message arrives
   undismiss <chat>
 
+Notes
+  notes <chat>                        what the Owner and agents saved about this chat
+  note <chat> --text "…" [--from <message>]... [--by <your name>]
+                                      save something worth remembering, as an agent's claim
+  note <chat> --delete <note>         delete a Note. Full mode only
+
 Write, no Confirmation needed
   draft <chat> --text "…" [--replace] save a reply in Beeper's compose box
   read <chat>                         mark as read
@@ -836,7 +911,7 @@ Write, needs --confirmed after the Owner says yes
 
 <chat> is a reference like c1a2b3c4d from triage or find, or an exact Beeper chat ID.
 <message> is a reference like m1a2b3c4d from the chat command.
-Names and titles are never accepted as <chat>. Add --json to triage, chat, find, who, search, media, and pending.
+Names and titles are never accepted as <chat>. Add --json to triage, chat, find, who, search, media, pending, and notes.
 --text - reads the message from stdin.
 Set BEEPER_ASSISTANT_MODE=drafts to allow reading and drafts only, or readonly to allow reading only.
 A file named mode in the state folder does the same, and the stricter of the two wins.`;
@@ -844,11 +919,11 @@ A file named mode in the state folder does the same, and the stricter of the two
 // What may run in each mode. This guards against mistakes. It is not a wall: an agent with a
 // shell can change its own environment, or call Beeper without this script.
 //   full      everything, with Confirmation where the skill asks for it
-//   drafts    for runs with no person in the turn: read, and save drafts. Nothing anyone else can see
+//   drafts    for runs with no person in the turn: read, save drafts, and save Notes. Nothing anyone else can see
 //   readonly  read only
 const ALLOWED = {
-  readonly: new Set(['check', 'mode', 'triage', 'chat', 'find', 'who', 'search', 'media', 'pending', 'outbox', 'dismiss', 'undismiss']),
-  drafts: new Set(['check', 'mode', 'triage', 'chat', 'find', 'who', 'search', 'media', 'pending', 'outbox', 'draft', 'skip', 'tidy', 'place']),
+  readonly: new Set(['check', 'mode', 'triage', 'chat', 'find', 'who', 'search', 'media', 'pending', 'outbox', 'dismiss', 'undismiss', 'notes']),
+  drafts: new Set(['check', 'mode', 'triage', 'chat', 'find', 'who', 'search', 'media', 'pending', 'outbox', 'draft', 'skip', 'tidy', 'place', 'notes', 'note']),
 };
 const RANK = { readonly: 0, drafts: 1, full: 2 };
 function modeFromEnv() {
@@ -873,7 +948,7 @@ function currentMode() {
   return RANK[e] <= RANK[f] ? e : f;
 }
 
-const COMMANDS = { check: cmdCheck, triage: cmdTriage, chat: cmdChat, find: cmdFind, who: cmdWho, search: cmdSearch, media: cmdMedia, dismiss: cmdDismiss, undismiss: cmdUndismiss, draft: cmdDraft, send: cmdSend, read: cmdRead, react: cmdReact, remind: cmdRemind, unremind: cmdUnremind, edit: cmdEdit, delete: cmdDelete, group: cmdGroup, start: cmdStart, contact: cmdContact, pending: cmdPending, skip: cmdSkip, tidy: cmdTidy, outbox: cmdOutbox, place: cmdPlace, mode: cmdMode };
+const COMMANDS = { check: cmdCheck, triage: cmdTriage, chat: cmdChat, find: cmdFind, who: cmdWho, search: cmdSearch, media: cmdMedia, dismiss: cmdDismiss, undismiss: cmdUndismiss, draft: cmdDraft, send: cmdSend, read: cmdRead, react: cmdReact, remind: cmdRemind, unremind: cmdUnremind, edit: cmdEdit, delete: cmdDelete, group: cmdGroup, start: cmdStart, contact: cmdContact, pending: cmdPending, skip: cmdSkip, tidy: cmdTidy, outbox: cmdOutbox, place: cmdPlace, mode: cmdMode, notes: cmdNotes, note: cmdNote };
 
 async function main() {
   const [name, ...rest] = process.argv.slice(2);
@@ -893,7 +968,7 @@ async function main() {
 }
 
 main().catch((e) => {
-  const kind = e instanceof UsageError ? 'usage' : e instanceof BeeperError ? 'beeper' : 'error';
+  const kind = e instanceof UsageError ? 'usage' : e instanceof BeeperError ? 'beeper' : e instanceof NotesError ? 'notes' : 'error';
   console.error(`${kind}: ${e.message}`);
   if (kind === 'error' && process.env.BA_DEBUG) console.error(e.stack);
   process.exitCode = kind === 'usage' ? 2 : 1;

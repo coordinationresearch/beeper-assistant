@@ -53,6 +53,7 @@ export function beeperRowToMessage(row, chatID) {
     timestamp: Number.isFinite(ts) ? new Date(ts).toISOString() : m.timestamp,
     isSender: m.isSender === true,
     isHidden: BEEPER_HIDDEN.includes(row.type),
+    isDeleted: m.isDeleted === true || row.isDeleted === 1,
   };
 }
 
@@ -60,7 +61,7 @@ export async function aroundInBeeper(chatID, messageID, { before = 10, after = 1
   if (!/^\d+$/.test(String(messageID))) throw new HistoryError(`Message ${messageID} is not the kind Beeper keeps in its history file.`);
   await open(file, "Beeper's history file", 'Open Beeper Desktop and try again.');
   await needColumns(file, 'mx_room_messages', ['id', 'roomID', 'hsOrder', 'type', 'eventID', 'isDeleted', 'message'], "Beeper's history file");
-  const cols = 'id, hsOrder, type, eventID, message';
+  const cols = 'id, hsOrder, type, eventID, isDeleted, message';
   const hidden = BEEPER_HIDDEN.map(str).join(', ');
   const sql = `with t as (select hsOrder h, id i from mx_room_messages where roomID = ${str(chatID)} and id = ${Number(messageID)})
 select * from (select ${cols} from mx_room_messages, t where roomID = ${str(chatID)} and (id = i or (type not in (${hidden}) and (hsOrder < h or (hsOrder = h and id < i)))) order by hsOrder desc, id desc limit ${before + 1})

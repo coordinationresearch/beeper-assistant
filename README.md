@@ -83,7 +83,7 @@ It can also react, edit, unsend, set reminders, and start groups.
 - **It runs on your Mac.** There is no server and no account, and it collects nothing.
 - **Your agent reads the messages it works with.** That text goes to whichever AI model your agent uses, the same as anything else you show your agent. If you would not paste a chat into your agent, do not ask the skill about it.
 - **How much it reads.** "What needs my reply?" gives your agent one line per waiting chat: the name, the app, and the last message or few. On a busy account that is a few pages of text. Opening one chat gives it the last 20 messages of that chat. A search gives it up to 20 matching messages, and reading around one gives it 20 more. For that, it reads Beeper's history file and, for iMessage, the Mac's Messages database, both read-only. Opening a photo or file sends that file to the model.
-- **It keeps a small folder,** at `~/.config/beeper-assistant/`. `state.json` holds chat and message ids: a lookup table for the short references the skill uses, and the chats you dismissed or had drafted. It stores no names and no message text. Photos and files your agent opens are copied into `media/` there and deleted after two days. Scheduled runs on an iMessage account queue draft text in `outbox.jsonl` for two days.
+- **It keeps a small folder,** at `~/.config/beeper-assistant/`. `state.json` holds chat and message ids: a lookup table for the short references the skill uses, and the chats you dismissed or had drafted. It stores no names and no message text. `notes/` holds one file per chat with the Notes agents saved about that person and the Owner's own Notes from the companion, each with its author and the messages it came from. Photos and files your agent opens are copied into `media/` there and deleted after two days. Scheduled runs on an iMessage account queue draft text in `outbox.jsonl` for two days.
 - **Messages from other people are treated as untrusted.** The skill marks them and tells your agent to never follow instructions inside them. That lowers the risk of a message tricking your agent. It does not remove it.
 - **Beeper is a separate product,** with its own account, pricing, and privacy terms. The skill only sees chats you have connected to Beeper.
 
@@ -102,7 +102,7 @@ You can narrow this further. Set one of these before starting your agent, or wri
 
 ```bash
 export BEEPER_ASSISTANT_MODE=readonly   # read only
-export BEEPER_ASSISTANT_MODE=drafts     # read and save drafts
+export BEEPER_ASSISTANT_MODE=drafts     # read, and save drafts and Notes
 ```
 
 Read-only is a good way to try it for the first time. Your agent can switch it on for you: ask it to "start in read-only mode". Loosening a mode is left to you, by editing or deleting that file.
@@ -128,7 +128,7 @@ Drafts show up in Beeper on your other devices, on every app except iMessage. iM
 cd ~/.local/share/beeper-assistant
 git pull && ./install.sh      # update
 ./install.sh --remove         # remove
-rm -rf ~/.config/beeper-assistant   # forget dismissed chats
+rm -rf ~/.config/beeper-assistant   # forget dismissed chats and Notes
 ```
 
 The installed copy is read-only on purpose. Some agents rewrite their own skills after a session, and a read-only copy stays the way it shipped.
