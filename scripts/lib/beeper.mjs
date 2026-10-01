@@ -107,38 +107,66 @@ export async function searchChats(query, { limit = 20 } = {}) {
 // ---- single-attempt writes ----
 // The CLI's bundled SDK repeats a request that fails with a server error. Beeper can
 // report such an error after the action already happened, so a repeated send or create
-// lands twice. Anything that must happen once goes through exactly one HTTP call,
-// using the login the CLI already holds.
-let target = null;
-async function getTarget() {
-  if (target) return target;
-  const data = await runBeeper(['status']);
-  const t = (data && data.target) || {};
-  const token = t.auth && t.auth.accessToken;
-  if (!t.baseURL || !token) throw new BeeperError('Could not read the Beeper login from the CLI. Run: beeper setup');
-  target = { baseURL: String(t.baseURL).replace(/\/$/, ''), token };
-  return target;
+// lands twice. Anything that must happen once goes through our own HTTP call, using
+// the login the CLI already holds.
+//
+// Each read of the login starts the CLI, so it is read once and kept. It goes stale when
+// `beeper setup` saves a new token or address, as after Beeper's session changes or it
+// moves port. Two failures prove Beeper did nothing with a request: a refused connection,
+// and Beeper's token check, a 401 with code "unauthorized" that it answers before any route
+// runs. Either one reads the login again, and only when it changed does the request go once
+// more. Every other failure gets no second try, a 500 or another 401 included.
+let login = null;
+function readLogin() {
+  if (login) return login;
+  // Bounded, since a send waits on it. The read takes about a second.
+  const read = runBeeper(['status'], { timeoutMs: 15_000 }).then((data) => {
+    const t = (data && data.target) || {};
+    const token = t.auth && t.auth.accessToken;
+    if (!t.baseURL || !token) throw new BeeperError('Could not read the Beeper login from the CLI. Run: beeper setup');
+    return { baseURL: String(t.baseURL).replace(/\/$/, ''), token };
+  });
+  read.catch(() => { if (login === read) login = null; });
+  login = read;
+  return read;
 }
 
-export async function apiOnce(method, path, body, { timeoutMs = 60_000 } = {}) {
-  const { baseURL, token } = await getTarget();
+// Returns the result, and `untouched` when Beeper provably did nothing: 'connection' or 'token'.
+async function attempt({ baseURL, token }, method, path, body, timeoutMs) {
   let res;
   try {
     res = await fetch(`${baseURL}${path}`, {
       method,
       headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
+      // A write that landed and then redirected to a closed port would look refused.
+      redirect: method === 'GET' ? 'follow' : 'manual',
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (e) {
-    return { ok: false, status: 0, error: e.name === 'TimeoutError' ? 'no answer in time' : String(e.message || e) };
+    if (e.cause && e.cause.code === 'ECONNREFUSED') return { result: { ok: false, status: 0, error: 'connection refused' }, untouched: 'connection' };
+    return { result: { ok: false, status: 0, error: e.name === 'TimeoutError' ? 'no answer in time' : String(e.message || e) } };
   }
   const text = await res.text();
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { /* not JSON */ }
-  if (res.ok) return { ok: true, status: res.status, data };
+  if (res.ok) return { result: { ok: true, status: res.status, data } };
   const msg = (data && (data.message || (data.error && (data.error.message || data.error)))) || text.slice(0, 200) || res.statusText;
-  return { ok: false, status: res.status, error: `${res.status} ${typeof msg === 'string' ? msg : JSON.stringify(msg)}` };
+  const result = { ok: false, status: res.status, error: `${res.status} ${typeof msg === 'string' ? msg : JSON.stringify(msg)}` };
+  return { result, untouched: res.status === 401 && data && data.code === 'unauthorized' ? 'token' : null };
+}
+
+/** @returns {Promise<{ ok: boolean, status: number, data?: any, error?: string }>} */
+export async function apiOnce(method, path, body, { timeoutMs = 60_000 } = {}) {
+  const kept = readLogin();
+  const used = await kept;
+  let last = await attempt(used, method, path, body, timeoutMs);
+  if (!last.untouched) return last.result;
+  if (login === kept) login = null;
+  const fresh = await readLogin().catch(() => null);
+  if (fresh && (fresh.token !== used.token || fresh.baseURL !== used.baseURL)) last = await attempt(fresh, method, path, body, timeoutMs);
+  // The CLI saves its login at setup and never reads Beeper's again, so only setup fixes a refused token.
+  return last.untouched === 'token' ? { ...last.result, error: `${last.result.error}. Run: beeper setup` } : last.result;
 }
 
 // Reads that run many times in a row go straight to the local API. Starting the CLI
