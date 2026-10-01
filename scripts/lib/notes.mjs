@@ -9,8 +9,10 @@ import { stateDir } from './state.mjs';
 
 export class NotesError extends Error {}
 
-export const NOTE_LIMITS = Object.freeze({ maxNotes: 30, maxChars: 500, agentAdds: 3, agentWindowMs: 30 * 60_000, maxTombstones: 500 });
-const LOCK_STALE_MS = 10_000;
+export const NOTE_LIMITS = Object.freeze({ maxNotes: 30, maxChars: 500, agentAdds: 3, agentWindowMs: 30 * 60_000, maxTombstones: 5000 });
+// A lock whose holder is still running is broken only after this long, so a writer the Mac
+// put to sleep mid-write is not overtaken on wake. A dead holder's lock is broken at once.
+const LOCK_STALE_MS = 120_000;
 const LOCK_WAIT_MS = 3_000;
 const VERSION = 1;
 
@@ -26,9 +28,16 @@ const sameSet = (a, b) => a.length > 0 && a.length === b.length && a.every((x, i
 
 const EMPTY = () => ({ version: VERSION, notes: [], tombstones: [], ledger: [] });
 
+const isTime = (v) => typeof v === 'string' && Number.isFinite(Date.parse(v));
+const validNote = (n) => n && typeof n.id === 'string' && typeof n.text === 'string' && n.text.length <= NOTE_LIMITS.maxChars
+  && (n.kind === 'owner' || n.kind === 'agent') && typeof n.author === 'string' && isTime(n.at)
+  && (n.kind === 'owner' ? n.source && n.source.owner === true : n.source && Array.isArray(n.source.messages));
+// Every field is checked, so a file another process damaged reads as an error, never as Notes.
 function checkDoc(doc, file) {
   const ok = doc && typeof doc === 'object' && doc.version === VERSION && Array.isArray(doc.notes) && Array.isArray(doc.tombstones) && Array.isArray(doc.ledger)
-    && doc.notes.every((n) => n && typeof n.id === 'string' && typeof n.text === 'string' && (n.kind === 'owner' || n.kind === 'agent'));
+    && doc.notes.every(validNote)
+    && doc.tombstones.every((t) => t && typeof t.textHash === 'string' && Array.isArray(t.sources))
+    && doc.ledger.every(isTime);
   if (!ok) throw new NotesError(`The Notes file for this chat is damaged or from another version, at ${file}. Nothing was changed. Move the file aside to start this chat's Notes over.`);
   return doc;
 }
@@ -61,6 +70,7 @@ async function lockInfo(lockDir) {
 
 async function isStale(lockDir, info, now) {
   if (info && Number.isInteger(info.pid) && !alive(info.pid)) return true;
+  // A live holder on another process keeps its lock until the longer limit.
   const at = info && Date.parse(info.at);
   if (Number.isFinite(at)) return now - at > LOCK_STALE_MS;
   // No owner file yet: the holder may be between mkdir and writing it, so go by the folder's age.
@@ -110,9 +120,16 @@ async function release(lock) {
   if (await held(lock)) await rm(lock.lockDir, { recursive: true, force: true });
 }
 
-async function writeDoc(file, doc, lock) {
+class Withdrawn extends Error {}
+// stillWanted runs after the temporary file is written, right before the rename, so a caller
+// that lost ownership during the write still writes nothing.
+async function writeDoc(file, doc, lock, stillWanted) {
   const tmp = `${file}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
   await writeFile(tmp, JSON.stringify(doc, null, 1), { mode: 0o600 });
+  if (stillWanted && !(await stillWanted())) {
+    await rm(tmp, { force: true });
+    throw new Withdrawn();
+  }
   // A writer whose lock was broken must not overwrite whoever holds it now.
   if (!(await held(lock))) {
     await rm(tmp, { force: true });
@@ -127,7 +144,7 @@ export async function withLock(chatID, fn, { dir, waitMs } = {}) {
   const lock = await acquire(file, { waitMs });
   try {
     const doc = await readDoc(file);
-    return await fn(doc, (next) => writeDoc(file, next, lock));
+    return await fn(doc, (next, stillWanted) => writeDoc(file, next, lock, stillWanted));
   } finally {
     await release(lock);
   }
@@ -146,7 +163,8 @@ export async function listNotes(chatID, opts = {}) {
 // ---- writing ----
 
 function cleanNote({ text, kind, author, source, runID }) {
-  const t = String(text ?? '').trim();
+  // One line: a newline in a Note could otherwise forge another Note's header in `ba notes`.
+  const t = String(text ?? '').replace(/\s+/g, ' ').trim();
   if (!t || t.length > NOTE_LIMITS.maxChars) throw new NotesError(`A Note holds 1 to ${NOTE_LIMITS.maxChars} characters. This one has ${t.length}.`);
   if (kind !== 'owner' && kind !== 'agent') throw new NotesError('A Note is either the Owner\'s or an agent\'s.');
   const who = String(author ?? '').replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 60);
@@ -175,14 +193,18 @@ function newID(notes) {
 // Returns { status, note? }. status is added, duplicate, tombstoned, rate-limited, full, or stale.
 // shouldCommit runs inside the lock just before the write. False means the caller no longer
 // owns this work, such as a Brief for a Chat the Owner already left, and nothing is written.
-/** @param {{ now?: number, shouldCommit?: () => boolean | Promise<boolean>, dir?: string, waitMs?: number }} [options] */
+// sign, for an Owner Note, returns a signature over the finished Note. The companion signs
+// with a key only it can read and uses only signed Owner Notes in drafts.
+/** @param {{ now?: number, shouldCommit?: () => boolean | Promise<boolean>, sign?: (note: { id: string, text: string, at: string }) => string, dir?: string, waitMs?: number }} [options] */
 export async function addNote(chatID, input, options = {}) {
-  const { now = Date.now(), shouldCommit, dir, waitMs } = options;
+  const { now = Date.now(), shouldCommit, sign, dir, waitMs } = options;
   const clean = cleanNote(input);
   return withLock(chatID, async (doc, save) => {
     const norm = normalizeNoteText(clean.text);
     const same = doc.notes.find((n) => normalizeNoteText(n.text) === norm);
-    if (same) return { status: 'duplicate', note: same };
+    // The Owner saving what an agent already claimed makes it the Owner's Note.
+    const adopt = same && same.kind === 'agent' && clean.kind === 'owner';
+    if (same && !adopt) return { status: 'duplicate', note: same };
 
     const agent = clean.kind === 'agent';
     if (agent) {
@@ -194,7 +216,7 @@ export async function addNote(chatID, input, options = {}) {
     const ledger = doc.ledger.filter((at) => now - Date.parse(at) < NOTE_LIMITS.agentWindowMs);
     if (agent && ledger.length >= NOTE_LIMITS.agentAdds) return { status: 'rate-limited' };
 
-    const notes = [...doc.notes];
+    const notes = doc.notes.filter((n) => !(adopt && n === same));
     if (notes.length >= NOTE_LIMITS.maxNotes) {
       const oldestAgent = notes.filter((n) => n.kind === 'agent').sort((a, b) => String(a.at).localeCompare(String(b.at)))[0];
       if (!oldestAgent) return { status: 'full' };
@@ -205,9 +227,13 @@ export async function addNote(chatID, input, options = {}) {
 
     const at = new Date(now).toISOString();
     const note = { id: newID(doc.notes), ...clean, at };
+    if (clean.kind === 'owner' && typeof sign === 'function') note.sig = String(sign({ id: note.id, text: note.text, at }));
     notes.push(note);
     if (agent) ledger.push(at);
-    await save({ ...doc, notes, ledger });
+    try { await save({ ...doc, notes, ledger }, shouldCommit); } catch (e) {
+      if (e instanceof Withdrawn) return { status: 'stale' };
+      throw e;
+    }
     return { status: 'added', note };
   }, { dir, waitMs });
 }

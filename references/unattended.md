@@ -36,7 +36,7 @@ A draft is a starting point. The Owner reads it, fixes it, and sends it themselv
 
 ## Notes
 
-A run may save what it learned about a person, under the same limits as an attended agent: `bau note <chat> --text "…" --from <message> --by <your name>`. Cite the messages it comes from, keep it under 500 characters, and save at most 3 for a chat. Save something a later run would want and the recent messages may not show, such as a move or a new job. A guess, or anything you would put an underscore in for, is not a Note.
+A run may save what it learned about a person, under the same limits as an attended agent: `bau note <chat> --text "…" --from <message> --by <your name>`. Cite the messages it comes from, keep it under 500 characters, and save at most 3 for a chat. Save something a later run would want and the recent messages may not show, such as a new job or the city they moved to. A guess, or anything you would put an underscore in for, is not a Note. Never save a street address, a money amount, health or legal matters, or details about someone else in the chat.
 
 `bau` never deletes a Note, and it refuses a Note the Owner already deleted.
 

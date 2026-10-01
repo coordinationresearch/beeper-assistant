@@ -124,6 +124,7 @@ test('Notes: drafts-only mode may read and save them, and never delete one', () 
   assert.match(go(ro, 'note', 'c00000000', '--text', 'hi').stderr, /Read-only mode is on/);
   assert.match(go({}, 'note', 'c00000000', '--text', 'hi', '--by', 'Owner').stderr, /--by Owner is reserved/);
   assert.match(go({}, 'note', 'c00000000', '--text', 'hi', '--by', 'sidebar').stderr, /reserved/);
+  for (const name of ['You', 'me', 'Unverified']) assert.match(go({}, 'note', 'c00000000', '--text', 'hi', '--by', name).stderr, /reserved/);
 });
 
 // A stand-in for the Beeper CLI that knows one made-up chat with one message.
@@ -170,4 +171,7 @@ test('Notes: an agent saves one, the list labels it a claim, and a deleted one s
   assert.equal(again.status, 2);
   assert.match(again.stderr, /It stays deleted/);
   assert.match(go({}, 'note', CHAT, '--delete', id).stderr, /No Note/);
+  // A source must be a message in the chat, and a control character can't make a reserved author.
+  assert.match(go({ BEEPER_API_URL: 'http://127.0.0.1:9' }, 'note', CHAT, '--text', 'Synthetic invented source', '--from', 'invented-id', '--by', 'test').stderr, /No message matches invented-id/);
+  assert.match(go({}, 'note', CHAT, '--text', 'Synthetic', '--by', '\u0001sidebar').stderr, /reserved/);
 });

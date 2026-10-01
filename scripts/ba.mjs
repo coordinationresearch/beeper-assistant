@@ -403,7 +403,8 @@ async function cmdUndismiss({ pos }) {
 // The Owner's Notes are their own words. An agent's Note is a claim, like message text.
 // Owner Notes come only from the sidebar's Save as note, so nothing here can make one.
 
-const RESERVED_AUTHORS = new Set(['owner', 'sidebar']);
+// Names that would read as the Owner or the sidebar in a Note's label.
+const RESERVED_AUTHORS = new Set(['owner', 'the owner', 'you', 'me', 'sidebar', 'unverified']);
 const day = (iso) => String(iso || '').slice(0, 10);
 const noteWho = (n) => (n.kind === 'owner' ? 'Owner' : `agent: ${n.author}`);
 const noteFrom = (n) => (n.kind === 'owner' ? 'the Owner\'s words' : `${n.source.messages.length} message${n.source.messages.length === 1 ? '' : 's'}`);
@@ -423,7 +424,8 @@ async function cmdNotes({ pos, flags }) {
   }
   out.push('');
   if (!notes.length) out.push('(none)');
-  for (const n of notes) out.push(`[${n.id}] ${noteWho(n)} · ${day(n.at)} · from ${noteFrom(n)}`, `    ${quote(n.text)}`);
+  // Notes saved before text was kept to one line still print on one.
+  for (const n of notes) out.push(`[${n.id}] ${noteWho(n)} · ${day(n.at)} · from ${noteFrom(n)}`, `    ${quote(String(n.text).replace(/\s+/g, ' '))}`);
   console.log(out.join('\n'));
 }
 
@@ -435,11 +437,19 @@ async function noteSources(chat, refs) {
   return refs.map((ref) => {
     const hit = recent.find((m) => messageAlias(m.id) === ref || m.id === ref);
     if (hit) return { id: hit.id, at: hit.timestamp || null };
-    if (!isMessageAlias(ref)) return { id: ref, at: null };
-    const saved = savedMessage(state, chat.id, ref);
-    if (saved) return { id: saved, at: null };
-    throw new UsageError(`No message matches ${ref} in this chat. Get references from the chat or search command.`);
-  });
+    if (isMessageAlias(ref)) return { id: savedMessage(state, chat.id, ref) || null, at: null };
+    return { id: ref, at: null, check: true };
+  }).reduce(async (done, source) => {
+    const list = await done;
+    // A raw ID must be a message in this chat, so a Note never claims a source that isn't there.
+    if (source.check) {
+      const r = await apiOnce('GET', `/v1/chats/${encodeURIComponent(chat.id)}/messages/${encodeURIComponent(source.id)}`, undefined, { timeoutMs: 5000 }).catch(() => ({ ok: false }));
+      if (!r.ok) throw new UsageError(`No message matches ${source.id} in this chat. Get references from the chat or search command.`);
+      return [...list, { id: source.id, at: (r.data && r.data.timestamp) || null }];
+    }
+    if (!source.id) throw new UsageError('No message matches that reference in this chat. Get references from the chat or search command.');
+    return [...list, { id: source.id, at: source.at }];
+  }, Promise.resolve([]));
 }
 
 async function cmdNote({ pos, flags }) {
@@ -452,8 +462,9 @@ async function cmdNote({ pos, flags }) {
     console.log(`Deleted Note ${r.note.id} from ${label(chat, await loadContacts())}. Agents will not save the same text, or a Note from the same messages, again.`);
     return;
   }
-  const by = String(flags.by || 'agent').trim();
-  if (RESERVED_AUTHORS.has(by.toLowerCase())) throw new UsageError(`--by ${by} is reserved. Give your own agent name, such as claude or hermes.`);
+  // Cleaned the way notes.mjs cleans it, so a control character can't smuggle in a reserved name.
+  const by = String(flags.by || 'agent').replace(/[\u0000-\u001f\u007f]/g, '').trim();
+  if (!by || RESERVED_AUTHORS.has(by.toLowerCase())) throw new UsageError(`--by ${by || '(empty)'} is reserved. Give your own agent name, such as claude or hermes.`);
   const text = textFrom(flags);
   const state = loadState();
   const chat = await resolveChat(pos[0], state);

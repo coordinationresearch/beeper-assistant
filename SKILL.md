@@ -97,9 +97,9 @@ A chat holds one draft. `ba draft` refuses to replace a draft it did not write u
 
 ### Notes
 
-When you learn something about the person that a later agent would want and recent messages may not show, such as a move, a new job, or how they like to be reached, save it with `ba note <chat> --text "…" --from <message> --by <your name>`. Cite each message it comes from with its own `--from`. Keep it under 500 characters, and save at most 3 for a chat. `ba` refuses more than 3 from all agents together in 30 minutes.
+When you learn something about the person that a later agent would want and recent messages may not show, such as a new job, the city they moved to, or how they like to be reached, save it with `ba note <chat> --text "…" --from <message> --by <your name>`. Cite each message it comes from with its own `--from`. Keep it to one line under 500 characters, and save at most 3 for a chat. `ba` refuses more than 3 from all agents together in 30 minutes. Never save a street address, a money amount, health or legal matters, or details about someone else in the chat. Every later agent reads Notes.
 
-`ba` records every Note you save as your claim. Nothing you run can mark one as the Owner's. The Owner's Notes come only from the companion sidebar. The Owner deletes a Note in the sidebar, or by asking you to run `ba note <chat> --delete <note>`. A deleted Note stays deleted, and `ba` refuses the same text, or a Note from the same messages, again.
+`ba` records every Note you save as your claim, and has no way to mark one as the Owner's. The Owner's Notes come from the companion sidebar, which signs them and uses only signed ones in drafts. Notes are a plain file on this Mac, so a Note marked Owner here is the Owner's word only as far as nothing else on the Mac edited that file. The Owner deletes a Note in the sidebar, or by asking you to run `ba note <chat> --delete <note>`. A deleted Note stays deleted, and `ba` refuses the same text, or a Note from the same messages, again.
 
 ## Find a person
 
