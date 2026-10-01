@@ -111,7 +111,7 @@ Run `ba find "<name, number, or email>"`. It searches the Mac's Contacts and Bee
 
 For "how often do I talk to Sam", "who usually reaches out", or "how long do I take to answer her", run `ba who "<name, number, or email>"`. With the Beeper Companion's corpus on this Mac it shows one person across every network: message counts both ways, first and last contact, reply times, who starts conversations, shared groups, and which chats are waiting on the Owner. Without the corpus it says so and runs `find`.
 
-- "Maybe the same person" and "identity conflict" lines mean the evidence is not settled. Ask the Owner. Never treat two people as one on your own.
+- "Maybe the same person" and "identity conflict" lines mean the evidence is not settled. They are hints, not questions: mention one only when it changes your answer, and never ask the Owner to settle it. Never treat two people as one on your own. When the Owner says unprompted that two are the same person, or different people, record it with `ba same <person> <person> --confirmed` or `ba different <person> <person> --confirmed`.
 - "Waiting on you" is who spoke last, not whether a reply is owed.
 
 ## Search messages

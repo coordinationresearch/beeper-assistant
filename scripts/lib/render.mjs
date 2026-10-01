@@ -311,8 +311,8 @@ export function renderWho(p, { now = Date.now(), builtAt = null, chatRef = (id) 
     out.push(`Groups: ${s.groups_listed} together, ${s.groups_active} where they wrote in the last year.`);
     if (s.ball_in_court_chats) out.push(`Ball in the Owner's court: ${s.ball_in_court_chats} chat${s.ball_in_court_chats === 1 ? '' : 's'}, since ${age(now - s.ball_in_court_since)} ago. That is who spoke last, not whether a reply is owed.`);
   } else out.push('No messages with this person in the corpus.');
-  for (const c of p.conflicts) out.push(`Identity conflict (${c}): evidence disagrees about who this is. Ask the Owner before relying on it.`);
-  for (const x of p.suggestions.slice(0, 5)) out.push(`Maybe the same person: ${x.other_name || '(no name)'} (${x.other}). Not joined. Ask the Owner.`);
+  for (const c of p.conflicts) out.push(`Identity conflict (${c}): evidence disagrees about who this is. Treat these stats as uncertain.`);
+  for (const x of p.suggestions.slice(0, 5)) out.push(`Maybe the same person: ${x.other_name || '(no name)'} (${x.other}). Not joined, so the stats above leave them out.`);
   if (builtAt) out.push(`From the companion's corpus, built ${age(now - Date.parse(builtAt))} ago.`);
   return out.join('\n');
 }
