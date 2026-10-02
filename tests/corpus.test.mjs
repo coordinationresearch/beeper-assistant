@@ -76,7 +76,7 @@ test('who reads one person from the corpus: chats with references, stats, and su
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /^WHO · Sam Rivera/);
   assert.match(r.stdout, /^c[0-9a-f]+ {2}iMessage · 5 messages · last/m, 'the iMessage chat has a Beeper reference');
-  assert.match(r.stdout, /^c[0-9a-f]+ {2}WhatsApp · 1 messages/m);
+  assert.match(r.stdout, /^c[0-9a-f]+ {2}WhatsApp · 1 message · last/m);
   assert.match(r.stdout, /4 from them, 2 from you, 3 from them in groups/);
   assert.match(r.stdout, /you started 25%\. Your reply time: median 12m \(10 answered, 2 not within 48h\)\. Theirs: 25m/);
   assert.match(r.stdout, /Ball in the Owner's court: 1 chat/);
@@ -133,6 +133,14 @@ test('the matching keys agree with the companion', async () => {
   assert.deepEqual((await findPeople(file, "o'brien")), [], 'quotes in a name cannot break the query');
   const p = await personProfile(file, 'p_aa11');
   assert.match(renderWho(p, { now: NOW }), /Groups: 2 together, 1 where they wrote in the last year/);
+});
+
+test('who says "just now" for a corpus built a moment ago, never "now ago"', async () => {
+  const p = await personProfile(makeCorpus(), 'p_aa11');
+  const out = renderWho(p, { now: NOW, builtAt: new Date(NOW - 20_000).toISOString() });
+  assert.match(out, /From the companion's corpus, built just now\.$/);
+  assert.match(renderWho({ ...p, chats: [{ ...p.chats[0], last_at: NOW }] }, { now: NOW }), / · last just now$/m);
+  assert.doesNotMatch(out, /now ago/);
 });
 
 test('same and different record the Owner\'s answer, only with --confirmed, never in an unattended run', () => {

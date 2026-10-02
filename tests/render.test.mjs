@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildIndex } from '../scripts/lib/contacts.mjs';
-import { UNTRUSTED_NOTE, age, quote, renderChat, renderTriage } from '../scripts/lib/render.mjs';
+import { UNTRUSTED_NOTE, age, ago, plural, quote, renderChat, renderTriage } from '../scripts/lib/render.mjs';
 import { chatAlias, isChatAlias, isMessageAlias, messageAlias, rememberChats } from '../scripts/lib/state.mjs';
 import { buildTriage } from '../scripts/lib/triage.mjs';
 import { CONTACT_ROWS, NOW, chat, person } from './fixtures.mjs';
@@ -28,7 +28,18 @@ test('hidden chats are summarised, never silently dropped', () => {
   assert.match(out, /1 waiting on the other person/);
   assert.match(out, /1 automated/);
   const capped = renderTriage(buildTriage([chat({ unread: 1 }), chat({ unread: 1 }), chat({ unread: 1 })], { now: NOW, contacts, maxPeople: 2 }));
-  assert.match(capped, /1 more people beyond the row limit, all older, so rerun with --max 3/);
+  assert.match(capped, /1 more person beyond the row limit, all older, so rerun with --max 3/);
+});
+
+test('counts of one are singular, and a moment ago is "just now"', () => {
+  assert.equal(plural(1, 'message'), '1 message');
+  assert.equal(plural(0, 'message'), '0 messages');
+  assert.equal(plural(1, 'person', 'people'), '1 person');
+  assert.equal(plural(3, 'person', 'people'), '3 people');
+  assert.equal(ago(20_000), 'just now');
+  assert.equal(ago(3 * 3_600_000), '3h ago');
+  const one = renderTriage(buildTriage([chat({ title: 'Ann', unread: 1 })], { now: NOW, contacts, windowDays: 1 }));
+  assert.ok(one.startsWith('TRIAGE · last 1 day · 1 person · 0 groups'));
 });
 
 test('the chat view shows the exact id, state, and message references', () => {

@@ -178,7 +178,7 @@ export function closenessWords(r, stats, now = Date.now()) {
   const since = stats.first ? new Date(stats.first).getFullYear() : null;
   const often = stats.ownerWeeks26 >= 13 ? ', most weeks' : stats.ownerWeeks26 >= 4 ? ', often lately' : '';
   const yearNow = new Date(now).getFullYear();
-  return `${compactCount(stats.messages)} messages${since && since < yearNow ? ` since ${since}` : ''}${often}`;
+  return `${compactCount(stats.messages)} ${stats.messages === 1 ? 'message' : 'messages'}${since && since < yearNow ? ` since ${since}` : ''}${often}`;
 }
 
 function answerWords(r, stats, stranger) {
@@ -197,11 +197,15 @@ function answerWords(r, stats, stranger) {
   return '';
 }
 
-// For someone the Owner knows, from the first unanswered message. For a stranger, from the
-// newest, since their wait is no obligation.
-export function waitWords(r, now = Date.now()) {
+// When the wait began, in milliseconds. For someone the Owner knows, the first unanswered
+// message. For a stranger, the newest, since their wait is no obligation.
+export function waitStart(r, now = Date.now()) {
   const since = KNOWS.has(r.closeness) ? Date.parse(r.waitingSince) : 0;
-  const ms = since ? Math.max(0, now - since) : r.ageMs;
+  return since || now - r.ageMs;
+}
+
+export function waitWords(r, now = Date.now()) {
+  const ms = Math.max(0, now - waitStart(r, now));
   const h = Math.floor(ms / HOUR);
   if (h < 1) return 'just now';
   if (h < 48) return `waiting ${h}h`;

@@ -17,6 +17,10 @@ export function age(ms) {
   if (d < 14) return `${d}d`;
   return `${Math.floor(d / 7)}w`;
 }
+// "3h ago", or "just now" for a time under a minute old, never "now ago".
+export const ago = (ms) => { const a = age(ms); return a === 'now' ? 'just now' : `${a} ago`; };
+// "1 message", "2 messages". Pass the plural when adding an s is wrong.
+export const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 function flags(r) {
   const f = [];
@@ -48,7 +52,7 @@ const CLASS_TITLES = {
 export function renderTriage(t) {
   const out = [];
   const ranked = t.people.some((r) => r.rank);
-  out.push(`TRIAGE · last ${t.windowDays} days · ${t.people.length} ${t.people.length === 1 ? 'person' : 'people'} · ${t.groups.length} ${t.groups.length === 1 ? 'group' : 'groups'}${ranked ? ' · ranked, highest first' : ''}`);
+  out.push(`TRIAGE · last ${plural(t.windowDays, 'day')} · ${plural(t.people.length, 'person', 'people')} · ${plural(t.groups.length, 'group')}${ranked ? ' · ranked, highest first' : ''}`);
   out.push(UNTRUSTED_NOTE);
   if (ranked) {
     for (const cls of Object.keys(CLASS_TITLES)) {
@@ -69,8 +73,8 @@ export function renderTriage(t) {
   for (const r of t.groups) out.push(rowLine(r) + (r.rank && r.rank.class !== 'nothing' ? ` [${r.rank.class.toUpperCase()}]` : ''));
   const s = t.stats;
   const hidden = [
-    s.morePeople && `${s.morePeople} more people ${ranked ? 'ranked below' : 'beyond'} the row limit, ${ranked ? '' : 'all older, '}so rerun with --max ${t.people.length + s.morePeople}`,
-    s.moreGroups && `${s.moreGroups} more groups`,
+    s.morePeople && `${plural(s.morePeople, 'more person', 'more people')} ${ranked ? 'ranked below' : 'beyond'} the row limit, ${ranked ? '' : 'all older, '}so rerun with --max ${t.people.length + s.morePeople}`,
+    s.moreGroups && plural(s.moreGroups, 'more group'),
     s.dismissed && `${s.dismissed} dismissed`,
     (s.olderUnread + s.stale) && `${s.olderUnread + s.stale}${t.truncated ? ' or more' : ''} older than the window, ${s.olderUnread} of them unread`,
     s.waitingOnThem && `${s.waitingOnThem} waiting on the other person`,
@@ -82,9 +86,9 @@ export function renderTriage(t) {
   ].filter(Boolean);
   out.push('');
   if (hidden.length) out.push(`Not shown: ${hidden.join(' · ')}`);
-  if (s.unresolvedNames) out.push(`${s.unresolvedNames} people show a number because Contacts has no match${t.contactsAvailable === false ? ' (Contacts could not be read, run the check command)' : ''}.`);
+  if (s.unresolvedNames) out.push(`${s.unresolvedNames === 1 ? '1 person shows' : `${s.unresolvedNames} people show`} a number because Contacts has no match${t.contactsAvailable === false ? ' (Contacts could not be read, run the check command)' : ''}.`);
   if (t.history && t.history.problems && t.history.problems.length) out.push(`History counts were partly unavailable, so some rows show "no history on this Mac": ${t.history.problems.join(' ')}`);
-  if (s.notInspected) out.push(`${s.notInspected} people were ranked from their preview alone, past the 150 the command reads closely.`);
+  if (s.notInspected) out.push(`${s.notInspected === 1 ? '1 person was' : `${s.notInspected} people were`} ranked from their preview alone, past the 150 the command reads closely.`);
   if (t.truncated) out.push('The chat scan hit its limit before reaching the start of the window. Use a shorter --days.');
   return out.join('\n');
 }
@@ -166,7 +170,7 @@ export function renderChat(chat, messages, { contacts = null, now = Date.now(), 
   const hidden = messages.length - shown.length;
   if (hidden) out.push(`(${hidden} reaction or system event${hidden > 1 ? 's' : ''} not shown)`);
   const last = around ? null : shown[shown.length - 1];
-  if (last) { const a = age(now - Date.parse(last.timestamp)); out.push('', `Last message is from ${last.isSender ? 'me' : 'them'}, ${a === 'now' ? 'just now' : `${a} ago`}.`); }
+  if (last) { out.push('', `Last message is from ${last.isSender ? 'me' : 'them'}, ${ago(now - Date.parse(last.timestamp))}.`); }
   if (shown.some((m) => Array.isArray(m.attachments) && m.attachments.length)) out.push(`To look at an attachment: media ${chatAlias(chat.id)} <message>`);
   return out.join('\n');
 }
@@ -296,23 +300,23 @@ export function renderWho(p, { now = Date.now(), builtAt = null, chatRef = (id) 
   for (const c of p.chats.slice(0, 15)) {
     const id = c.beeper_chat_id || (c.chat_key.startsWith('imessage:') ? null : c.chat_key);
     const ref = id ? chatRef(id) : '(not linked to Beeper yet, use find)';
-    const last = c.last_at ? `last ${age(now - c.last_at)} ago` : 'no messages';
-    out.push(`${ref}  ${networkName(c.network)} · ${c.messages} messages · ${last}`);
+    const last = c.last_at ? `last ${ago(now - c.last_at)}` : 'no messages';
+    out.push(`${ref}  ${networkName(c.network)} · ${plural(c.messages, 'message')} · ${last}`);
   }
   if (p.chats.length > 15) out.push(`+${p.chats.length - 15} more chats`);
   const s = p.stats;
   if (s) {
     const lastWho = s.last_from_owner ? 'you' : 'them';
-    out.push(`Messages: ${s.from_them} from them, ${s.from_owner} from you, ${s.group_from_them} from them in groups.${s.first_at ? ` First ${day(s.first_at)}, last ${age(now - s.last_at)} ago, from ${lastWho}.` : ''}`);
+    out.push(`Messages: ${s.from_them} from them, ${s.from_owner} from you, ${s.group_from_them} from them in groups.${s.first_at ? ` First ${day(s.first_at)}, last ${ago(now - s.last_at)}, from ${lastWho}.` : ''}`);
     if (s.conversations) {
       const ratio = s.initiation_ratio == null ? '-' : `${Math.round(s.initiation_ratio * 100)}%`;
       out.push(`Conversations: ${s.conversations}, you started ${ratio}. Your reply time: median ${span(s.owner_reply_first_median_s)} (${s.owner_replied} answered, ${s.owner_unanswered} not within 48h). Theirs: ${span(s.their_reply_first_median_s)}.`);
     }
     out.push(`Groups: ${s.groups_listed} together, ${s.groups_active} where they wrote in the last year.`);
-    if (s.ball_in_court_chats) out.push(`Ball in the Owner's court: ${s.ball_in_court_chats} chat${s.ball_in_court_chats === 1 ? '' : 's'}, since ${age(now - s.ball_in_court_since)} ago. That is who spoke last, not whether a reply is owed.`);
+    if (s.ball_in_court_chats) out.push(`Ball in the Owner's court: ${plural(s.ball_in_court_chats, 'chat')}, since ${ago(now - s.ball_in_court_since)}. That is who spoke last, not whether a reply is owed.`);
   } else out.push('No messages with this person in the corpus.');
   for (const c of p.conflicts) out.push(`Identity conflict (${c}): evidence disagrees about who this is. Treat these stats as uncertain.`);
   for (const x of p.suggestions.slice(0, 5)) out.push(`Maybe the same person: ${x.other_name || '(no name)'} (${x.other}). Not joined, so the stats above leave them out.`);
-  if (builtAt) out.push(`From the companion's corpus, built ${age(now - Date.parse(builtAt))} ago.`);
+  if (builtAt) out.push(`From the companion's corpus, built ${ago(now - Date.parse(builtAt))}.`);
   return out.join('\n');
 }

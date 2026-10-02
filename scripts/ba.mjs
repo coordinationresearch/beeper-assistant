@@ -10,7 +10,7 @@ import { decideSame, findPeople, openCorpus, personProfile } from './lib/corpus.
 import { HistoryError, chatStats, historyStatus, messagesAround, strangerRates } from './lib/history.mjs';
 import { NotesError, addNote, deleteNote, listNotes } from './lib/notes.mjs';
 import { collectTriage } from './lib/triage-run.mjs';
-import { UNTRUSTED_NOTE, age, mediaKind, networkName, quote, renderChat, renderMedia, renderPending, renderSearch, renderTriage, renderWho } from './lib/render.mjs';
+import { UNTRUSTED_NOTE, ago, mediaKind, networkName, plural, quote, renderChat, renderMedia, renderPending, renderSearch, renderTriage, renderWho } from './lib/render.mjs';
 import { appendOutbox, chatAlias, dismiss, dropFromOutbox, isChatAlias, isMessageAlias, loadState, messageAlias, pruneDismissed, readOutbox, recordDraft, recordSkip, copyMedia, pruneMedia, rememberChats, rememberMessages, saveState, savedMessage, stateDir, undismiss } from './lib/state.mjs';
 import { matchChat, outboxEntry, selectPending, stillCurrent, tidyDecision } from './lib/unattended.mjs';
 import { DEFAULT_WINDOW_DAYS, applyContext, buildTriage, chatName, clip, counterparties, draftText, finalizeTriage, handlesOf, htmlToText, isGroup, previewKind, wantsHistory } from './lib/triage.mjs';
@@ -137,7 +137,7 @@ async function cmdCheck() {
   }
 
   const c = await loadContacts();
-  if (c.available) lines.push(`ok    Contacts readable (${c.people.size} people)`);
+  if (c.available) lines.push(`ok    Contacts readable (${plural(c.people.size, 'person', 'people')})`);
   else lines.push('warn  Contacts not readable, so iMessage chats will show phone numbers. The skill works without it.', '      Optional fix: give the app your agent runs in Full Disk Access, in System Settings, Privacy & Security.');
   for (const h of await historyStatus()) lines.push(h.ok ? `ok    ${h.text}` : `warn  ${h.text}`);
 
@@ -273,7 +273,7 @@ async function cmdFind({ pos, flags }) {
   const out = [`FIND ${quote(q)} · ${rows.length} chat${rows.length === 1 ? '' : 's'}`];
   if (people.length) out.push(`Contacts matching: ${people.slice(0, 8).map((p) => p.name).join(', ')}${people.length > 8 ? ` +${people.length - 8}` : ''}`);
   else if (!contacts.available) out.push('Contacts could not be read, so matching used chat titles only.');
-  for (const r of rows.slice(0, 40)) out.push(`${r.ref}  ${r.name} · ${r.network} · ${r.type} · last ${age(now - (Date.parse(r.lastActivity) || 0))} ago · matched by ${r.matchedBy}`);
+  for (const r of rows.slice(0, 40)) out.push(`${r.ref}  ${r.name} · ${r.network} · ${r.type} · last ${ago(now - (Date.parse(r.lastActivity) || 0))} · matched by ${r.matchedBy}`);
   if (!rows.length) out.push('No chat found. The person may have no chat yet, or their chat is older than the last 800.');
   // Groups carry their own names, so only one-to-one chats say whether several people match.
   if (people.length > 1 || new Set(rows.filter((r) => r.type === 'single').map((r) => r.name)).size > 1) out.push('More than one person matches. Ask the Owner which one. Never pick for them.');
@@ -301,7 +301,7 @@ async function cmdWho({ pos, flags }) {
     const rows = people.map((p) => ({ id: p.person_id, name: p.display_name, messages: p.messages, networks: JSON.parse(p.networks || '[]') }));
     if (flags.json) { console.log(JSON.stringify({ query: q, people: rows }, null, 1)); return; }
     const out = [`WHO ${quote(q)} · ${rows.length} people`];
-    for (const r of rows) out.push(`${r.id}  ${r.name || '(no name)'} · ${r.networks.map(networkName).join(', ') || 'no chats'} · ${r.messages} messages`);
+    for (const r of rows) out.push(`${r.id}  ${r.name || '(no name)'} · ${r.networks.map(networkName).join(', ') || 'no chats'} · ${plural(r.messages, 'message')}`);
     out.push('More than one person matches. Ask the Owner which one. Never pick for them. Then run who with their id.');
     console.log(out.join('\n'));
     return;
@@ -367,7 +367,7 @@ async function cmdSearch({ pos, flags }) {
     console.log(JSON.stringify({ query, more: found.more, chats: [...byChat.values()] }, null, 1));
     return;
   }
-  const filters = [chat && `in ${label(chat, contacts)}`, from && `from ${from}`, media.length && `with ${media.join(' or ')}`, days && `last ${days} days`].filter(Boolean);
+  const filters = [chat && `in ${label(chat, contacts)}`, from && `from ${from}`, media.length && `with ${media.join(' or ')}`, days && `last ${plural(days, 'day')}`].filter(Boolean);
   console.log(renderSearch({ query, ...found }, { contacts, filters, max }));
 }
 
@@ -419,7 +419,7 @@ async function cmdUndismiss({ pos }) {
 
 // ---------- notes ----------
 // The Owner's Notes are their own words. An agent's Note is a claim, like message text.
-// Owner Notes come only from the sidebar's Save as note, so nothing here can make one.
+// Nothing here can make an Owner Note. Only the sidebar's Save as note did, and it is gone.
 
 // Names that would read as the Owner or the sidebar in a Note's label.
 const RESERVED_AUTHORS = new Set(['owner', 'the owner', 'you', 'me', 'sidebar', 'unverified']);
@@ -521,7 +521,7 @@ async function cmdDraft({ pos, flags }) {
   if (existing && !flags.replace) {
     throw new UsageError(`This chat already holds a draft: ${quote(clip(existing, 200))}. It may be the Owner's own. Ask before replacing it, then run again with --replace.`);
   }
-  if (flags['dry-run']) { console.log(`Dry run. Would save a draft of ${text.length} characters in ${label(chat, contacts)}.`); return; }
+  if (flags['dry-run']) { console.log(`Dry run. Would save a draft of ${plural(text.length, 'character')} in ${label(chat, contacts)}.`); return; }
   if (existing) await runBeeper(['chats', 'draft', '--chat', chat.id, '--clear'], { write: true });
   await runBeeper(['chats', 'draft', '--chat', chat.id, '--text', text], { write: true });
   const after = await showChat(chat.id);
@@ -845,7 +845,7 @@ async function cmdGroup({ flags }) {
   chat = await showChat(chat.id);
   rememberChats(state, [chat]);
   saveState(state);
-  console.log(`${existed ? 'A group with exactly those members already exists' : 'Group created'}: ${chatName(chat, contacts).name} · ${chat.network} · ${participantsOf(chat).length} members · ref ${chatAlias(chat.id)}`);
+  console.log(`${existed ? 'A group with exactly those members already exists' : 'Group created'}: ${chatName(chat, contacts).name} · ${chat.network} · ${plural(participantsOf(chat).length, 'member')} · ref ${chatAlias(chat.id)}`);
   if (failure) console.log(`Note: Beeper reported an error (${failure}) but the group exists. Do not create it again.`);
   if (flags.title && String(chat.title || '').trim() !== String(flags.title).trim()) {
     try {
