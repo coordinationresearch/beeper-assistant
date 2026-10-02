@@ -6,6 +6,7 @@ import { homedir } from 'node:os';
 import { BeeperError, SEARCH_MEDIA, apiOnce, asList, attachmentFile, listChats, listChatsSince, listMessages, listMessagesFast, participantsOf, runBeeper, searchChats, searchMessages, showChat } from './lib/beeper.mjs';
 import { loadContacts, looksLikeEmail, looksLikePhone, normalizeEmail, normalizePhone, ownersOf, resetContacts, searchPeople } from './lib/contacts.mjs';
 import { addContact } from './lib/contacts-write.mjs';
+import { gapsIn } from './lib/gaps.mjs';
 import { decideSame, findPeople, openCorpus, personProfile } from './lib/corpus.mjs';
 import { HistoryError, chatStats, historyStatus, messagesAround, strangerRates } from './lib/history.mjs';
 import { NotesError, addNote, deleteNote, listNotes } from './lib/notes.mjs';
@@ -58,11 +59,6 @@ function needConfirmed(flags, what) {
 }
 
 const isTombstone = (text) => /\bunsent a message\b|\bmessage (was )?deleted\b|^\{\{sender\}\}/i.test(String(text || ''));
-// A gap in a draft is a lone underscore: "I land _ and could do dinner". Text that still holds
-// one is not ready to send. Underscores inside a word, as in snake_case or _italics_, do not count.
-// The older [[…]] marker is still caught.
-const GAP = /(?<![\p{L}\p{N}_])_+(?![\p{L}\p{N}_])|\[\[[^\]]*\]\]/gu;
-const gapsIn = (text) => String(text || '').match(GAP) || [];
 const looksLikeExactID = (s) => /^(!|imsg##)/.test(s) || /^\d+$/.test(s);
 
 async function resolveChat(ref, state) {

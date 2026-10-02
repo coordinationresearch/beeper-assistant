@@ -1,15 +1,9 @@
-// The blank marker: a lone underscore. Kept in step with the pattern in scripts/ba.mjs.
+// The blank marker: a lone underscore. One rule, in lib/gaps.mjs, for the skill and the companion.
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { gapsIn, hasGap } from '../scripts/lib/gaps.mjs';
 
-const src = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'ba.mjs'), 'utf8');
-const m = src.match(/^const GAP = (\/.*\/[a-z]*);$/m);
-assert.ok(m, 'GAP pattern not found in ba.mjs');
-const GAP = new Function(`return ${m[1]}`)();
-const count = (s) => (s.match(GAP) || []).length;
+const count = (s) => gapsIn(s).length;
 
 test('a lone underscore is a blank', () => {
   assert.equal(count('I land _ and could do dinner after'), 1);
@@ -32,4 +26,21 @@ test('underscores inside words are not blanks', () => {
 
 test('the older bracket marker is still caught', () => {
   assert.equal(count('see you [[which day?]]'), 1);
+});
+
+test('hasGap gives the same answer however often it is asked', () => {
+  for (let i = 0; i < 3; i++) {
+    assert.equal(hasGap('I land _ and could do dinner'), true);
+    assert.equal(hasGap('see you [[which day?]]'), true);
+    assert.equal(hasGap('use snake_case and _italics_ freely'), false);
+    assert.equal(hasGap(''), false);
+    assert.equal(hasGap(undefined), false);
+  }
+});
+
+test('ba.mjs uses the shared rule instead of its own copy', async () => {
+  const { readFileSync } = await import('node:fs');
+  const src = readFileSync(new URL('../scripts/ba.mjs', import.meta.url), 'utf8');
+  assert.match(src, /from '\.\/lib\/gaps\.mjs'/);
+  assert.doesNotMatch(src, /^const GAP = /m);
 });
