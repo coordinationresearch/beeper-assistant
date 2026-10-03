@@ -136,7 +136,7 @@ export async function personProfile(file, id) {
 
 // The Owner's answer about whether two People are one person. Stored on one member of each,
 // as the companion stores it, so it survives any change of id. The same write marks People
-// to rebuild, which the companion does at its next update, within 15 minutes.
+// to rebuild at once, which the companion does at its next update, within 15 minutes.
 export async function decideSame(file, a, b, decision) {
   if (decision !== 'same' && decision !== 'different') throw new Error('decision must be same or different');
   const rep = async (id) => {
@@ -151,7 +151,7 @@ export async function decideSame(file, a, b, decision) {
   await query(file, `BEGIN IMMEDIATE;
     INSERT INTO identity_decisions (a, b, decision, decided_at) VALUES (${str(lo)}, ${str(hi)}, ${str(decision)}, ${str(new Date().toISOString())})
       ON CONFLICT (a, b) DO UPDATE SET decision = excluded.decision, decided_at = excluded.decided_at;
-    INSERT INTO corpus_meta (key, value) VALUES ('derived_dirty', '1') ON CONFLICT (key) DO UPDATE SET value = excluded.value;
+    INSERT INTO corpus_meta (key, value) VALUES ('derived_dirty', '1'), ('rebuild_now', '1') ON CONFLICT (key) DO UPDATE SET value = excluded.value;
     COMMIT;`, { write: true });
   return { ok: true };
 }
