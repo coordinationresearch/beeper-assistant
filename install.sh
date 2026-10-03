@@ -73,6 +73,7 @@ for dir in "${TARGETS[@]}"; do
       mkdir -p "$dir"; clear_dest "$dest" || continue
       mkdir -p "$dest"
       cp "$SRC/SKILL.md" "$dest/"
+      cp "$SRC/ba" "$dest/"
       cp -R "$SRC/references" "$SRC/scripts" "$dest/"
       [ -f "$SRC/LICENSE" ] && cp "$SRC/LICENSE" "$dest/"
       # The source may be a download and not a git checkout, so none of this may fail the install.
@@ -91,17 +92,12 @@ done
 [ "$MODE" = "remove" ] && exit 0
 [ ${#DONE[@]} -gt 0 ] || { echo "Nothing was installed." >&2; exit 1; }
 
-BA="${DONE[0]}/scripts/ba.mjs"
+# The launcher runs the skill inside the Beeper Companion app when it can, else with Node.
+BA="${DONE[0]}/ba"
 echo
 if [ "$CHECK" = "1" ]; then
   echo "Checking the setup:"
-  if ! command -v node >/dev/null 2>&1; then
-    echo "FAIL  Node not found"
-    echo "      Fix: brew install node"
-    echo "      No brew command? Install Homebrew first, from https://brew.sh"
-    echo
-    echo "Setup is not finished. Fix the line marked FAIL, then check again."
-  elif node "$BA" check; then
+  if "$BA" check; then
     echo
     echo "Ready. Ask your agent:  what needs my reply?"
     echo "A new skill loads when a session starts. An agent that is mid-session can read"
@@ -112,4 +108,4 @@ if [ "$CHECK" = "1" ]; then
   fi
   echo
 fi
-echo "Check the setup any time:  node \"$BA\" check"
+echo "Check the setup any time:  \"$BA\" check"

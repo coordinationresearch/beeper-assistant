@@ -1,0 +1,58 @@
+#!/bin/sh
+# Runs the beeper-assistant skill: ba <command> [options]. Same commands as scripts/ba.mjs.
+#
+# Inside the Beeper Companion app when it can, so a Mac needs neither Node nor the Beeper
+# CLI: the app runs its own copy of the skill and reaches Beeper with its own approval.
+# An app that has this turned off answers 64 before it touches anything, and the skill runs
+# with Node 18 or newer instead, as it always has.
+dir=$(cd "$(dirname "$0")" && pwd)
+
+# The app opens its sealed approval through the login keychain, which macOS finds under
+# HOME. A harness or sandbox that sets HOME elsewhere would get a "Keychain Not Found"
+# dialog, so the app is used only when HOME is this user's own home folder.
+# Fails closed: a home it can't look up, or a HOME it can't enter, means no app.
+user=$(id -un)
+real_home=$(/usr/bin/dscl . -read "/Users/$user" NFSHomeDirectory 2>/dev/null | /usr/bin/awk '{print $2}')
+case "$user" in *[!A-Za-z0-9._-]*|'') ;; *) [ -n "$real_home" ] || real_home=$(eval "printf '%s' ~$user") ;; esac
+same_dir() {
+  x=$(cd "$1" 2>/dev/null && pwd -P) && y=$(cd "$2" 2>/dev/null && pwd -P) && [ -n "$x" ] && [ "$x" = "$y" ]
+}
+home_ok=0
+if [ -z "${HOME+set}" ]; then home_ok=1
+elif [ -n "$HOME" ] && [ -n "$real_home" ] && same_dir "$HOME" "$real_home"; then home_ok=1
+fi
+
+# An app that can run the skill carries a skill-runtime file; an older one would open its
+# windows instead, so it is never asked. BEEPER_COMPANION_APP names one, for tests.
+find_app() {
+  if [ -n "$BEEPER_COMPANION_APP" ]; then
+    [ -f "$BEEPER_COMPANION_APP/Contents/Resources/app/skill-runtime" ] && { printf '%s\n' "$BEEPER_COMPANION_APP"; return 0; }
+    return 1
+  fi
+  for a in "/Applications/Beeper Companion.app" "$HOME/Applications/Beeper Companion.app"; do
+    [ -f "$a/Contents/Resources/app/skill-runtime" ] && { printf '%s\n' "$a"; return 0; }
+  done
+  a=$(mdfind "kMDItemCFBundleIdentifier == 'sh.coordination.agent'" 2>/dev/null | head -n 1)
+  [ -n "$a" ] && [ -f "$a/Contents/Resources/app/skill-runtime" ] && { printf '%s\n' "$a"; return 0; }
+  return 1
+}
+
+if [ "$home_ok" = 1 ] && app=$(find_app); then
+  "$app/Contents/MacOS/Beeper Companion" --beeper-assistant "$@"
+  code=$?
+  [ "$code" -ne 64 ] && exit "$code"
+fi
+
+if command -v node >/dev/null 2>&1 && node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 18 ? 0 : 1)' 2>/dev/null; then
+  exec node "$dir/scripts/ba.mjs" "$@"
+fi
+
+if [ "$home_ok" = 0 ]; then
+  echo "FAIL  beeper-assistant can't use Beeper Companion with HOME set to $HOME, which is not your home folder." >&2
+  echo "      Fix: run it with your usual HOME, or install Node 18 or newer and the Beeper CLI." >&2
+  exit 78
+fi
+echo "FAIL  beeper-assistant needs the Beeper Companion app, or Node 18 or newer." >&2
+echo "      Fix: open Beeper Companion, then Settings → Skill → Run the skill inside Beeper Companion." >&2
+echo "      Or install Node: brew install node" >&2
+exit 127

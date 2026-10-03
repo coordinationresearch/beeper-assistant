@@ -15,7 +15,7 @@ const writable = (p) => { try { accessSync(p, constants.W_OK); return true; } ca
 // A copy of the skill outside any git repo, the way a downloaded folder would be.
 function download() {
   const dir = mkdtempSync(join(tmpdir(), 'ba-dl-'));
-  for (const f of ['SKILL.md', 'LICENSE', 'install.sh', 'references', 'scripts']) cpSync(join(SKILL, f), join(dir, 'beeper-assistant', f), { recursive: true });
+  for (const f of ['SKILL.md', 'LICENSE', 'install.sh', 'ba', 'references', 'scripts']) cpSync(join(SKILL, f), join(dir, 'beeper-assistant', f), { recursive: true });
   return join(dir, 'beeper-assistant');
 }
 
@@ -26,7 +26,7 @@ test('the installer finishes from a folder that is not a git checkout', () => {
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /Copied .*read-only, revision not from git/);
   const dest = join(target, 'beeper-assistant');
-  for (const f of ['SKILL.md', 'INSTALLED', 'scripts/ba.mjs', 'scripts/ba-unattended.mjs', 'scripts/lib/triage.mjs', 'references/traps.md', 'references/unattended.md']) assert.ok(existsSync(join(dest, f)), f);
+  for (const f of ['SKILL.md', 'INSTALLED', 'ba', 'scripts/ba.mjs', 'scripts/ba-unattended.mjs', 'scripts/lib/triage.mjs', 'references/traps.md', 'references/unattended.md']) assert.ok(existsSync(join(dest, f)), f);
   assert.equal(writable(join(dest, 'SKILL.md')), false);
   assert.match(readFileSync(join(dest, 'INSTALLED'), 'utf8'), /revision: not from git/);
 });
@@ -69,7 +69,7 @@ test('the installer checks the setup and says plainly when it is not finished', 
   assert.match(r.stdout, /FAIL  Beeper command line tool is not installed/);
   assert.match(r.stdout, /brew install beeper\/tap\/cli/);
   assert.match(r.stdout, /Setup is not finished/);
-  assert.match(r.stdout, /Check the setup any time:  node ".*ba\.mjs" check/);
+  assert.match(r.stdout, /Check the setup any time:  ".*beeper-assistant\/ba" check/);
   const quiet = sh(join(src, 'install.sh'), '--to', target, '--no-check');
   assert.equal(quiet.stdout.includes('Checking the setup'), false);
 });

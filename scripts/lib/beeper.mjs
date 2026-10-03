@@ -29,6 +29,15 @@ function errorText(parsed, stderr, err) {
 }
 
 export function runBeeper(args, { write = false, timeoutMs = 60_000 } = {}) {
+  // An app that holds its own login (setLoginSource) has no CLI to start: each call goes to
+  // the API the CLI wraps. See runOverApi.
+  if (loginSource) return runOverApi(args, { write, timeoutMs });
+  return runCli(args, { write, timeoutMs });
+}
+
+// The CLI itself, whatever login source is set. An app reads the CLI's own login through
+// this, since runBeeper(['status']) with a source set would ask the source again.
+export function runCli(args, { write = false, timeoutMs = 60_000 } = {}) {
   return new Promise((resolve, reject) => {
     const env = { ...process.env };
     if (write) delete env.BEEPER_READONLY;
@@ -46,6 +55,96 @@ export function runBeeper(args, { write = false, timeoutMs = 60_000 } = {}) {
     });
   });
 }
+
+// ---- the CLI's calls, over the API ----
+// The calls ba makes, each as the one API request the CLI makes for it, so the skill runs
+// where there is no CLI (the companion app runs it; docs/plans/skill-without-node.md).
+// Writes go through apiOnce: one attempt, never repeated (see the single-attempt note
+// below). Anything else fails plainly rather than guessing what the CLI would have done.
+const API_ONLY = 'not available without the Beeper CLI';
+// The flags ba passes, each known to take a value or not. A value is the next argument
+// whatever it looks like, so draft text such as "--clear" stays text, as the CLI keeps it.
+// An unknown flag, or a value flag at the end, fails rather than changing the request.
+const VALUE_FLAGS = new Set(['chat', 'to', 'text', 'message', 'id', 'reaction', 'when', 'title', 'account', 'limit', 'max-participants']);
+const BOOLEAN_FLAGS = new Set(['clear', 'dismiss-on-message', 'for-everyone', 'archived', 'unread', 'no-archived', 'no-muted', 'no-low-priority']);
+function flagsOf(args) {
+  const flags = {}, pos = [];
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (!a.startsWith('--')) { pos.push(a); continue; }
+    const name = a.slice(2);
+    if (BOOLEAN_FLAGS.has(name)) flags[name] = true;
+    else if (VALUE_FLAGS.has(name) && i + 1 < args.length) flags[name] = args[++i];
+    else throw new BeeperError(`${a}: ${API_ONLY}`, { args });
+  }
+  return { flags, pos };
+}
+// The contact payload Beeper's start call wants, from what ba was given: a number, an
+// email, a Matrix user ID, or a username.
+export function startUser(to) {
+  const t = String(to).trim();
+  if (/^@[^:\s]+:\S+$/.test(t)) return { id: t };
+  if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(t)) return { email: t };
+  if (/^\+?[\d\s().-]{7,}$/.test(t)) return { phoneNumber: t.replace(/[\s().-]/g, '') };
+  return { username: t };
+}
+async function api(method, path, body, timeoutMs) {
+  const res = await apiOnce(method, path, body, { timeoutMs });
+  if (!res.ok) throw new BeeperError(res.error || `${method} ${path} failed`, { status: res.status });
+  return res.data;
+}
+// Messages newest first, as the CLI lists them, paging back until `limit`.
+async function messagesOverApi(chatID, limit, timeoutMs) {
+  const out = [];
+  const seen = new Set();
+  let cursor = null;
+  for (let page = 0; page < 50 && out.length < limit; page++) {
+    const q = cursor ? `?${new URLSearchParams({ cursor, direction: 'before' })}` : '';
+    const data = await api('GET', `/v1/chats/${encodeURIComponent(chatID)}/messages${q}`, undefined, timeoutMs);
+    const items = asList(data).filter((m) => m && !seen.has(m.id) && seen.add(m.id));
+    out.push(...items);
+    if (!data || !data.hasMore || !data.oldestCursor || !items.length) break;
+    cursor = data.oldestCursor;
+  }
+  return out.sort((a, b) => String(b.sortKey || b.timestamp).localeCompare(String(a.sortKey || a.timestamp), 'en', { numeric: true })).slice(0, limit);
+}
+export async function runOverApi(args, { write = false, timeoutMs = 60_000 } = {}) {
+  const [group, verb, ...rest] = args;
+  const key = `${group} ${verb || ''}`.trim();
+  if (write !== WRITES.has(key)) throw new BeeperError(`${key}: ${API_ONLY}`, { args });
+  const { flags, pos } = flagsOf(rest);
+  const chat = flags.chat || flags.to;
+  const enc = encodeURIComponent;
+  // Every call on one Chat names it; without one the path would read /v1/chats/undefined.
+  if (/^(chats (show|draft|mark-read|remind|unremind|rename)|messages (list|show|edit|delete)|send react)$/.test(key) && (typeof chat !== 'string' || !chat))
+    throw new BeeperError(`${key}: no Chat given`, { args });
+  if (/^(messages (show|edit|delete)|send react)$/.test(key) && (typeof flags.id !== 'string' || !flags.id)) throw new BeeperError(`${key}: no message given`, { args });
+  switch (key) {
+    case 'status': { const login = await readLogin(); return { target: { baseURL: login.baseURL, auth: { accessToken: login.token } } }; }
+    case 'version': return { version: 'api' };
+    case 'chats list':
+      if (flags.archived) return listArchivedChats({ limit: Number(flags.limit) || 400 });
+      if (flags.unread) return (await listChatsOverApi({ limit: 5000, filtered: Boolean(flags['no-archived']) }))
+        .filter((c) => c.unreadCount > 0 || c.isMarkedUnread).slice(0, Number(flags.limit) || 200);
+      return listChatsOverApi({ limit: Number(flags.limit) || 200, filtered: Boolean(flags['no-archived']) });
+    case 'chats show': return api('GET', `/v1/chats/${enc(chat)}?maxParticipantCount=${Number(flags['max-participants']) || 50}`, undefined, timeoutMs);
+    case 'chats search': return asList(await api('GET', `/v1/chats/search?${new URLSearchParams({ query: pos[0] ?? '', limit: String(Math.min(Number(flags.limit) || 20, 200)) })}`, undefined, timeoutMs));
+    case 'messages list': return messagesOverApi(chat, Number(flags.limit) || 20, timeoutMs);
+    case 'messages show': return api('GET', `/v1/chats/${enc(chat)}/messages/${enc(flags.id)}`, undefined, timeoutMs);
+    case 'chats draft': return api('PATCH', `/v1/chats/${enc(chat)}`, { draft: flags.clear ? null : { text: String(flags.text ?? '') } }, timeoutMs);
+    case 'chats mark-read': return api('POST', `/v1/chats/${enc(chat)}/read`, {}, timeoutMs);
+    case 'send react': return api('POST', `/v1/chats/${enc(chat)}/messages/${enc(flags.id)}/reactions`, { reactionKey: String(flags.reaction) }, timeoutMs);
+    case 'chats remind': return api('POST', `/v1/chats/${enc(chat)}/reminders`, { reminder: { remindAt: String(flags.when), dismissOnIncomingMessage: Boolean(flags['dismiss-on-message']) } }, timeoutMs);
+    case 'chats unremind': return api('DELETE', `/v1/chats/${enc(chat)}/reminders`, undefined, timeoutMs);
+    case 'messages edit': return api('PUT', `/v1/chats/${enc(chat)}/messages/${enc(flags.id)}`, { text: String(flags.message ?? '') }, timeoutMs);
+    // Beeper deletes for everyone unless told not to; the CLI only did when asked.
+    case 'messages delete': return api('DELETE', `/v1/chats/${enc(chat)}/messages/${enc(flags.id)}?forEveryone=${flags['for-everyone'] === true}`, undefined, timeoutMs);
+    case 'chats rename': return api('PATCH', `/v1/chats/${enc(chat)}`, { title: String(flags.title ?? '') }, timeoutMs);
+    case 'chats start': return api('POST', '/v1/chats/start', { accountID: String(flags.account), user: startUser(pos[0]) }, timeoutMs);
+    default: throw new BeeperError(`${key}: ${API_ONLY}`, { args });
+  }
+}
+const WRITES = new Set(['chats draft', 'chats mark-read', 'send react', 'chats remind', 'chats unremind', 'messages edit', 'messages delete', 'chats rename', 'chats start']);
 
 // The CLI returns a bare array today. Older builds wrapped lists as {items: [...]}.
 export function asList(data) {

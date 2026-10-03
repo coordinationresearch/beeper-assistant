@@ -108,8 +108,11 @@ async function cmdCheck() {
   if (process.platform === 'darwin') lines.push('ok    Mac');
   else fail(`This is ${process.platform}. The skill needs a Mac.`);
 
+  // Run by the ba launcher inside the Beeper Companion app, it needs no Node and no CLI.
+  const inApp = Boolean(process.versions.electron);
   const major = Number(process.versions.node.split('.')[0]);
-  if (major >= 18) lines.push(`ok    Node ${process.versions.node}`);
+  if (inApp) lines.push('ok    Runs inside Beeper Companion');
+  else if (major >= 18) lines.push(`ok    Node ${process.versions.node}`);
   else fail(`Node ${process.versions.node} is too old`, 'Fix: brew install node');
 
   const app = ['/Applications/Beeper Desktop.app', `${homedir()}/Applications/Beeper Desktop.app`].some((p) => existsSync(p));
@@ -117,16 +120,31 @@ async function cmdCheck() {
   else fail('Beeper Desktop is not installed', 'Fix: the person installs it from https://www.beeper.com, signs in, and connects their chat apps.');
 
   let cli = true;
-  try { await runBeeper(['version'], { timeoutMs: 15_000 }); } catch (e) { if (e.detail && e.detail.code === 'NO_CLI') cli = false; }
-  if (cli) lines.push('ok    Beeper command line tool is installed');
-  else fail('Beeper command line tool is not installed', 'Fix: brew install beeper/tap/cli', 'No brew command? Install Homebrew first, from https://brew.sh');
+  if (inApp) {
+    // Set by the app before it runs the skill (apps/beeper-companion/src/main/skill-runtime.ts).
+    const login = process.env.BEEPER_ASSISTANT_APP_LOGIN;
+    if (login === 'via-app') lines.push("ok    Reaches Beeper with Beeper Companion's approval");
+    else if (login === 'via-cli') lines.push("ok    Reaches Beeper with the Beeper CLI's login (Beeper Companion has no approval of its own yet)");
+    else if (login === 'sealed-unreadable') fail("Beeper Companion's saved approval would not open", 'Fix: unlock the login keychain, or the person connects Beeper again in Beeper Companion → Settings.');
+    else if (login === 'api-off') fail("Beeper's API is off", 'Fix: the person opens Beeper, Settings → Integrations, and turns on Allow connections.');
+    else if (login === 'not-running') fail('Beeper Desktop is not running', 'Fix: the person opens Beeper Desktop.');
+    else if (login) fail('Beeper Companion is not connected to Beeper', 'Fix: the person opens Beeper Companion → Settings → Beeper → Connect, and approves in Beeper.');
+    const keychain = process.env.BEEPER_ASSISTANT_APP_KEYCHAIN;
+    if (keychain === 'ok') lines.push("ok    Beeper Companion's Keychain item opens from here");
+    else if (keychain === 'denied') fail("Beeper Companion's Keychain item would not open from here", 'Fix: unlock the login keychain, then check again.');
+  } else {
+    try { await runBeeper(['version'], { timeoutMs: 15_000 }); } catch (e) { if (e.detail && e.detail.code === 'NO_CLI') cli = false; }
+    if (cli) lines.push('ok    Beeper command line tool is installed');
+    else fail('Beeper command line tool is not installed', 'Fix: brew install beeper/tap/cli', 'No brew command? Install Homebrew first, from https://brew.sh');
+  }
 
   if (app && cli) {
     try {
       await listChats({ limit: 1, filtered: false });
       lines.push('ok    Beeper answers');
     } catch (e) {
-      fail(`Beeper does not answer: ${e.message}`, 'Fix: open Beeper Desktop and sign in, then run: beeper setup', 'If setup asks a question, the person answers it in their own terminal.');
+      if (inApp) fail(`Beeper does not answer: ${e.message}`, 'Fix: the person opens Beeper Desktop, then Beeper Companion → Settings → Beeper → Connect.');
+      else fail(`Beeper does not answer: ${e.message}`, 'Fix: open Beeper Desktop and sign in, then run: beeper setup', 'If setup asks a question, the person answers it in their own terminal.');
     }
   } else {
     lines.push('      Beeper connection not tested yet, since something above is missing.');
@@ -888,7 +906,7 @@ async function cmdGroup({ flags }) {
 async function cmdStart({ flags }) {
   const to = (flags.to || [])[0];
   if (!to || (flags.to || []).length !== 1) throw new UsageError('Usage: start --to <number, email, or user ID> --account <account> --confirmed. For several people use group.');
-  if (!flags.account) throw new UsageError('Give --account. Run: beeper accounts --json');
+  if (!flags.account) throw new UsageError('Give --account. Run: ba accounts');
   needConfirmed(flags, `Starting a chat with ${to} on ${flags.account}`);
   const beforeIDs = new Set((await listChats({ limit: 50, filtered: false })).map((c) => c.id));
   let failure = null;
@@ -913,6 +931,7 @@ const HELP = `beeper-assistant
 
 Read
   check                               verify the setup, and print the fix for anything missing
+  accounts                            the chat accounts in Beeper, with the IDs start and group take
   mode [readonly | drafts]            show the mode, or make it stricter
   triage [--days 14] [--max 100]      chats that want the Owner's attention. Add --all to keep automated senders
   chat <chat> [--limit 20]            recent messages in one chat
@@ -974,8 +993,8 @@ A file named mode in the state folder does the same, and the stricter of the two
 //   drafts    for runs with no person in the turn: read, save drafts, and save Notes. Nothing anyone else can see
 //   readonly  read only
 const ALLOWED = {
-  readonly: new Set(['check', 'mode', 'triage', 'chat', 'find', 'who', 'mind', 'search', 'media', 'pending', 'outbox', 'dismiss', 'undismiss', 'notes']),
-  drafts: new Set(['check', 'mode', 'triage', 'chat', 'find', 'who', 'mind', 'search', 'media', 'pending', 'outbox', 'draft', 'skip', 'tidy', 'place', 'notes', 'note']),
+  readonly: new Set(['check', 'accounts', 'mode', 'triage', 'chat', 'find', 'who', 'mind', 'search', 'media', 'pending', 'outbox', 'dismiss', 'undismiss', 'notes']),
+  drafts: new Set(['check', 'accounts', 'mode', 'triage', 'chat', 'find', 'who', 'mind', 'search', 'media', 'pending', 'outbox', 'draft', 'skip', 'tidy', 'place', 'notes', 'note']),
 };
 const RANK = { readonly: 0, drafts: 1, full: 2 };
 function modeFromEnv() {
@@ -1000,7 +1019,16 @@ function currentMode() {
   return RANK[e] <= RANK[f] ? e : f;
 }
 
-const COMMANDS = { check: cmdCheck, triage: cmdTriage, chat: cmdChat, find: cmdFind, who: cmdWho, mind: cmdMind, same: (a) => cmdSameOrDifferent('same', a), different: (a) => cmdSameOrDifferent('different', a), search: cmdSearch, media: cmdMedia, dismiss: cmdDismiss, undismiss: cmdUndismiss, draft: cmdDraft, send: cmdSend, read: cmdRead, react: cmdReact, remind: cmdRemind, unremind: cmdUnremind, edit: cmdEdit, delete: cmdDelete, group: cmdGroup, start: cmdStart, contact: cmdContact, pending: cmdPending, skip: cmdSkip, tidy: cmdTidy, outbox: cmdOutbox, place: cmdPlace, mode: cmdMode, notes: cmdNotes, note: cmdNote };
+// The accounts Beeper has signed in, for start and group: one line each, ID first.
+async function cmdAccounts() {
+  const res = await apiOnce('GET', '/v1/accounts', undefined, { timeoutMs: 15_000 });
+  if (!res.ok) throw new BeeperError(`Accounts unavailable: ${res.error}`);
+  const rows = asList(res.data);
+  if (!rows.length) { console.log('No accounts in Beeper.'); return; }
+  for (const a of rows) console.log(`${a.accountID ?? a.id}  ${networkName(a.network ?? (a.bridge && a.bridge.id) ?? '')}`);
+}
+
+const COMMANDS = { check: cmdCheck, accounts: cmdAccounts, triage: cmdTriage, chat: cmdChat, find: cmdFind, who: cmdWho, mind: cmdMind, same: (a) => cmdSameOrDifferent('same', a), different: (a) => cmdSameOrDifferent('different', a), search: cmdSearch, media: cmdMedia, dismiss: cmdDismiss, undismiss: cmdUndismiss, draft: cmdDraft, send: cmdSend, read: cmdRead, react: cmdReact, remind: cmdRemind, unremind: cmdUnremind, edit: cmdEdit, delete: cmdDelete, group: cmdGroup, start: cmdStart, contact: cmdContact, pending: cmdPending, skip: cmdSkip, tidy: cmdTidy, outbox: cmdOutbox, place: cmdPlace, mode: cmdMode, notes: cmdNotes, note: cmdNote };
 
 async function main() {
   const [name, ...rest] = process.argv.slice(2);
@@ -1019,11 +1047,13 @@ async function main() {
   await fn(args);
 }
 
-main().catch((e) => {
+// Settles once the command is done, so a host process (the companion app, when it runs the
+// skill without Node) knows when to exit with process.exitCode.
+const finished = main().catch((e) => {
   const kind = e instanceof UsageError ? 'usage' : e instanceof BeeperError ? 'beeper' : e instanceof NotesError ? 'notes' : 'error';
   console.error(`${kind}: ${e.message}`);
   if (kind === 'error' && process.env.BA_DEBUG) console.error(e.stack);
   process.exitCode = kind === 'usage' ? 2 : 1;
 });
 
-export { UNTRUSTED_NOTE, asList };
+export { UNTRUSTED_NOTE, asList, finished };

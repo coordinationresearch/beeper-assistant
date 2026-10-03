@@ -7,7 +7,7 @@ description: Triages, reads, drafts, and sends messages across iMessage, WhatsAp
 
 Helps the Owner stay on top of their messages. The Owner is the person whose Beeper account this is.
 
-Commands below are written as `ba`. That means `node <this skill's folder>/scripts/ba.mjs`. It needs a Mac with Beeper Desktop open, the Beeper CLI, and Node 18 or newer. On first use, or when anything fails, run `ba check`. It names what is missing and how to fix it.
+Commands below are written as `ba`. That means `<this skill's folder>/ba`. It needs a Mac with Beeper Desktop open. It runs inside the Beeper Companion app when the app allows it, and otherwise needs Node 18 or newer and the Beeper CLI. On first use, or when anything fails, run `ba check`. It names what is missing and how to fix it.
 
 ## Five rules
 
@@ -176,7 +176,7 @@ A scheduled run has nobody to ask, so it may read, save drafts, and save Notes, 
 
 ## Anything else in Beeper
 
-`ba` covers the common jobs. For the rest, use the Beeper CLI directly. Look things up in this order:
+`ba` covers the common jobs. For the rest, use the Beeper CLI directly, when this Mac has it. Look things up in this order:
 
 1. `beeper <command> --help`. It always matches the installed version.
 2. `beeper man` for every command on one page.
