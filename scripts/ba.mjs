@@ -7,7 +7,7 @@ import { BeeperError, SEARCH_MEDIA, apiOnce, asList, attachmentFile, listChats, 
 import { loadContacts, looksLikeEmail, looksLikePhone, normalizeEmail, normalizePhone, ownersOf, resetContacts, searchPeople } from './lib/contacts.mjs';
 import { addContact } from './lib/contacts-write.mjs';
 import { gapsIn } from './lib/gaps.mjs';
-import { decideSame, findPeople, openCorpus, personProfile } from './lib/corpus.mjs';
+import { corpusMessage, decideSame, findPeople, mindMapPath, openCorpus, personProfile } from './lib/corpus.mjs';
 import { HistoryError, chatStats, historyStatus, messagesAround, strangerRates } from './lib/history.mjs';
 import { NotesError, addNote, deleteNote, listNotes } from './lib/notes.mjs';
 import { collectTriage } from './lib/triage-run.mjs';
@@ -318,6 +318,30 @@ async function cmdWho({ pos, flags }) {
     return;
   }
   console.log(renderWho(p, { now, builtAt: corpus.builtAt, chatRef: chatAlias }));
+}
+
+// The Owner's Mind map, as the Beeper Companion wrote it: Areas of their life and claims drawn
+// from their own messages, each with the Corpus key of its message. --receipt <key> reads one.
+async function cmdMind({ flags }) {
+  if (flags.receipt) {
+    const corpus = await openCorpus();
+    if (!corpus.ok) throw new UsageError(`Can't read a receipt: ${corpus.reason}.`);
+    const m = await corpusMessage(corpus.file, String(flags.receipt));
+    if (!m || m.retracted) throw new UsageError('The corpus no longer has that message. It was deleted or edited since. Leave that claim out.');
+    const where = m.kind === 'group' ? `the group ${quote(m.title || 'with no name')}` : `a chat with ${m.counterparty || m.title || 'someone'}`;
+    const at = m.sent_at ? new Date(m.sent_at).toISOString().slice(0, 16).replace('T', ' ') : 'an unknown time';
+    const ref = m.beeper_chat_id || (m.chat_key.startsWith('imessage:') ? null : m.chat_key);
+    // So `chat <ref>` opens it next, as after who.
+    if (ref) { const state = loadState(); rememberChats(state, [{ id: ref }]); saveState(state); }
+    if (flags.json) { console.log(JSON.stringify({ key: m.message_key, fromOwner: Boolean(m.from_owner), at: m.sent_at, network: m.network, where, chat: ref ? chatAlias(ref) : null, text: m.text }, null, 1)); return; }
+    console.log([`${m.from_owner ? 'The Owner' : 'Someone else'} wrote this in ${where} on ${networkName(m.network)}, ${at}${ref ? ` · chat ${chatAlias(ref)}` : ''}:`, UNTRUSTED_NOTE, quote(m.text || '(no text)')].join('\n'));
+    return;
+  }
+  const path = mindMapPath();
+  if (!existsSync(path)) throw new UsageError('There is no Mind map on this Mac yet. The Beeper Companion builds one once its corpus has read the Owner\'s messages.');
+  const text = readFileSync(path, 'utf8');
+  if (flags.json) { console.log(JSON.stringify({ path, text }, null, 1)); return; }
+  console.log(`Mind map: ${path}\n\n${text}`);
 }
 
 // The Owner's answer about whether two People from who are one person. Only on the Owner's
@@ -896,6 +920,8 @@ Read
   find <name | number | email>        every chat for a person. Add --all for groups they are in
   who <name | number | email>         one person on every network, with message counts, reply times, and
                                       who starts conversations. Needs the Beeper Companion's corpus; without it, runs find
+  mind [--receipt <key>]              the Owner's Mind map: Areas of their life and claims from their own messages.
+                                      --receipt reads the message a claim cites. Needs the Beeper Companion
   search <words> [--chat <chat>] [--from me|them] [--media image] [--days N] [--max 20]
                                       messages that contain these words, across all chats
   media <chat> <message>              put a message's photos and files on this Mac, and print where
@@ -937,7 +963,7 @@ Write, needs --confirmed after the Owner says yes
 
 <chat> is a reference like c1a2b3c4d from triage or find, or an exact Beeper chat ID.
 <message> is a reference like m1a2b3c4d from the chat command.
-Names and titles are never accepted as <chat>. Add --json to triage, chat, find, who, search, media, pending, and notes.
+Names and titles are never accepted as <chat>. Add --json to triage, chat, find, who, mind, search, media, pending, and notes.
 --text - reads the message from stdin.
 Set BEEPER_ASSISTANT_MODE=drafts to allow reading and drafts only, or readonly to allow reading only.
 A file named mode in the state folder does the same, and the stricter of the two wins.`;
@@ -948,8 +974,8 @@ A file named mode in the state folder does the same, and the stricter of the two
 //   drafts    for runs with no person in the turn: read, save drafts, and save Notes. Nothing anyone else can see
 //   readonly  read only
 const ALLOWED = {
-  readonly: new Set(['check', 'mode', 'triage', 'chat', 'find', 'who', 'search', 'media', 'pending', 'outbox', 'dismiss', 'undismiss', 'notes']),
-  drafts: new Set(['check', 'mode', 'triage', 'chat', 'find', 'who', 'search', 'media', 'pending', 'outbox', 'draft', 'skip', 'tidy', 'place', 'notes', 'note']),
+  readonly: new Set(['check', 'mode', 'triage', 'chat', 'find', 'who', 'mind', 'search', 'media', 'pending', 'outbox', 'dismiss', 'undismiss', 'notes']),
+  drafts: new Set(['check', 'mode', 'triage', 'chat', 'find', 'who', 'mind', 'search', 'media', 'pending', 'outbox', 'draft', 'skip', 'tidy', 'place', 'notes', 'note']),
 };
 const RANK = { readonly: 0, drafts: 1, full: 2 };
 function modeFromEnv() {
@@ -974,7 +1000,7 @@ function currentMode() {
   return RANK[e] <= RANK[f] ? e : f;
 }
 
-const COMMANDS = { check: cmdCheck, triage: cmdTriage, chat: cmdChat, find: cmdFind, who: cmdWho, same: (a) => cmdSameOrDifferent('same', a), different: (a) => cmdSameOrDifferent('different', a), search: cmdSearch, media: cmdMedia, dismiss: cmdDismiss, undismiss: cmdUndismiss, draft: cmdDraft, send: cmdSend, read: cmdRead, react: cmdReact, remind: cmdRemind, unremind: cmdUnremind, edit: cmdEdit, delete: cmdDelete, group: cmdGroup, start: cmdStart, contact: cmdContact, pending: cmdPending, skip: cmdSkip, tidy: cmdTidy, outbox: cmdOutbox, place: cmdPlace, mode: cmdMode, notes: cmdNotes, note: cmdNote };
+const COMMANDS = { check: cmdCheck, triage: cmdTriage, chat: cmdChat, find: cmdFind, who: cmdWho, mind: cmdMind, same: (a) => cmdSameOrDifferent('same', a), different: (a) => cmdSameOrDifferent('different', a), search: cmdSearch, media: cmdMedia, dismiss: cmdDismiss, undismiss: cmdUndismiss, draft: cmdDraft, send: cmdSend, read: cmdRead, react: cmdReact, remind: cmdRemind, unremind: cmdUnremind, edit: cmdEdit, delete: cmdDelete, group: cmdGroup, start: cmdStart, contact: cmdContact, pending: cmdPending, skip: cmdSkip, tidy: cmdTidy, outbox: cmdOutbox, place: cmdPlace, mode: cmdMode, notes: cmdNotes, note: cmdNote };
 
 async function main() {
   const [name, ...rest] = process.argv.slice(2);

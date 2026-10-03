@@ -4,7 +4,7 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 export const corpusPath = () => process.env.BEEPER_ASSISTANT_CORPUS || join(homedir(), 'Library', 'Application Support', 'Beeper Companion', 'corpus.db');
 
@@ -100,6 +100,19 @@ export async function findPeople(file, q) {
     FROM people p LEFT JOIN person_stats s ON s.person_id = p.person_id WHERE ${where}
     ORDER BY messages DESC, p.person_id LIMIT 12`);
 }
+
+// One message by its Corpus key, as the Mind map cites it: its text, when, who wrote it, and
+// its Chat. Null when the Corpus no longer counts it: gone at the source, or a twin.
+export async function corpusMessage(file, key) {
+  const rows = await query(file, `SELECT m.message_key, m.from_owner, m.sent_at, m.text, m.retracted, c.network, c.kind, c.title, c.beeper_chat_id, c.chat_key,
+      p.display_name AS counterparty
+    FROM messages m LEFT JOIN chats c ON c.chat_key = m.chat_key LEFT JOIN person_members pm ON pm.member_key = c.counterparty LEFT JOIN people p ON p.person_id = pm.person_id
+    WHERE m.message_key = ${str(key)} AND m.duplicate_of IS NULL AND m.source_state = 'present' LIMIT 1`);
+  return rows[0] || null;
+}
+
+// The Mind map the Beeper Companion writes for agents, next to its corpus, or null when it has none.
+export const mindMapPath = (file = corpusPath()) => join(dirname(file), 'mind-map.md');
 
 // One Person: Chats on every network, stats, open conflicts, and suggested matches.
 export async function personProfile(file, id) {
