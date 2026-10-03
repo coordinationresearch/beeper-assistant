@@ -95,6 +95,18 @@ Write a reply only when the Owner asks for one. A triage list is a list, and dra
 
 A chat holds one draft. `ba draft` refuses to replace a draft it did not write unless you add `--replace`, so ask first. Pass text with quotes or newlines through stdin using `--text -`.
 
+### Post the reply to the sidebar
+
+When the Owner runs Beeper Companion, post the reply to its sidebar instead of saving a draft: `ba suggest <chat> --text "…"`. The sidebar puts it in Beeper's compose box when the Owner opens that chat and labels it with your name. Nothing sends until the Owner presses Send there. A newer message in the chat retires it, so post right after you read the chat.
+
+A reply can come in steps, the way people text: a tapback, a quick answer, then the longer thought a few seconds later. Write one only when that is how the Owner answers this person:
+
+```
+ba suggest <chat> --steps '[{"react":"<message>","key":"❤️"},{"say":"yes!!"},{"wait":"20s"},{"say":"want me to book a table at 7?"}]'
+```
+
+At most 6 steps and 2 reactions. Each wait is between 1 second and 5 minutes, and all of them together come to at most 10 minutes. A reaction names one of the chat's 30 newest messages. The Owner confirms the whole reply once, and anything still waiting is cancelled if the other person writes, the Owner types there, or the Mac sleeps. `ba suggest` changes nothing in Beeper, so it needs no Confirmation and works in drafts-only mode. Add `--agent "<your name>"` when `ba` names you wrong.
+
 ### Notes
 
 When you learn something about the person that a later agent would want and recent messages may not show, such as a new job, the city they moved to, or how they like to be reached, save it with `ba note <chat> --text "…" --from <message> --by <your name>`. Cite each message it comes from with its own `--from`. Keep it to one line under 500 characters, and save at most 3 for a chat. `ba` refuses more than 3 from all agents together in 30 minutes. Never save a street address, a money amount, health or legal matters, or details about someone else in the chat. Every later agent reads Notes.

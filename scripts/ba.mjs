@@ -10,6 +10,8 @@ import { gapsIn } from './lib/gaps.mjs';
 import { corpusMessage, decideSame, findPeople, mindMapPath, openCorpus, personProfile } from './lib/corpus.mjs';
 import { HistoryError, chatStats, historyStatus, messagesAround, strangerRates } from './lib/history.mjs';
 import { NotesError, addNote, deleteNote, listNotes } from './lib/notes.mjs';
+import { REPLY_PROBLEMS, replyProblem } from './lib/reply.mjs';
+import { agentLabel, stepsFromAgent, writeSuggestion } from './lib/suggestions.mjs';
 import { collectTriage } from './lib/triage-run.mjs';
 import { UNTRUSTED_NOTE, ago, mediaKind, networkName, plural, quote, renderChat, renderMedia, renderPending, renderSearch, renderTriage, renderWho } from './lib/render.mjs';
 import { appendOutbox, chatAlias, dismiss, dropFromOutbox, isChatAlias, isMessageAlias, loadState, messageAlias, pruneDismissed, readOutbox, recordDraft, recordSkip, copyMedia, pruneMedia, rememberChats, rememberMessages, saveState, savedMessage, stateDir, undismiss } from './lib/state.mjs';
@@ -576,6 +578,35 @@ async function cmdDraft({ pos, flags }) {
   console.log(`Draft saved in ${label(chat, contacts)}. Nothing was sent. ${where}${open ? ` It holds ${open} blank${open > 1 ? 's' : ''} for the Owner to fill.` : ''}`);
 }
 
+// ---------- the companion's sidebar ----------
+
+// Posts a reply to Beeper Companion's sidebar for this Chat: one message, or several messages
+// and reactions with waits between them. Sends nothing and writes nothing to Beeper, so every
+// mode allows it. The sidebar puts the first message in Beeper's box, and the whole reply goes
+// only when the Owner presses Send all there (ADR 0071).
+async function cmdSuggest({ pos, flags }) {
+  const state = loadState();
+  const chat = await resolveChat(pos[0], state);
+  const contacts = await loadContacts();
+  const recent = (await listMessagesFast(chat.id, { limit: 30 })).filter((m) => !m.isDeleted);
+  const newest = recent.at(-1);
+  if (!newest) throw new UsageError(`${label(chat, contacts)} has no messages to reply to.`);
+  let steps;
+  if (flags.steps !== undefined) {
+    const raw = flags.steps === '-' ? readFileSync(0, 'utf8') : String(flags.steps);
+    let list;
+    try { list = JSON.parse(raw); } catch { throw new UsageError('--steps takes a JSON list, such as [{"say":"Yes!"},{"wait":"20s"},{"say":"See you at 7"}].'); }
+    try { steps = await stepsFromAgent(list, (ref) => resolveMessage(chat, ref)); } catch (e) { if (e instanceof UsageError) throw e; throw new UsageError(`Not posted. ${e.message}`); }
+  } else steps = [{ kind: 'message', text: textFrom(flags), waitMs: 0 }];
+  const problem = replyProblem({ steps }, new Set(recent.map((m) => String(m.id))));
+  if (problem) throw new UsageError(`Not posted. ${REPLY_PROBLEMS[problem]}`);
+  const author = agentLabel(process.env, flags.agent);
+  const counts = `${plural(steps.filter((s) => s.kind === 'message').length, 'message')}${steps.some((s) => s.kind === 'react') ? ` and ${plural(steps.filter((s) => s.kind === 'react').length, 'reaction')}` : ''}`;
+  if (flags['dry-run']) { console.log(`Dry run. Would post ${counts} to the sidebar for ${label(chat, contacts)}, as ${author}.`); return; }
+  writeSuggestion(chat.id, { steps, forMessageID: String(newest.id), author });
+  console.log(`Posted to Beeper Companion's sidebar for ${label(chat, contacts)}: ${counts}, as ${author}. Nothing was sent. When the Owner opens this Chat, the sidebar puts the first message in Beeper's compose box, and the reply sends only if they press Send there. A newer message in the Chat retires it.`);
+}
+
 // ---------- unattended runs ----------
 
 async function gatherRows({ flags, state, contacts }) {
@@ -957,6 +988,9 @@ Notes
 
 Write, no Confirmation needed
   draft <chat> --text "…" [--replace] save a reply in Beeper's compose box
+  suggest <chat> --text "…"           post a reply to Beeper Companion's sidebar, which sends only on the Owner's Send
+  suggest <chat> --steps '<json>'     a reply in steps: [{"react":"<message>","key":"❤️"},{"say":"…"},{"wait":"20s"},{"say":"…"}].
+                                      --steps - reads stdin. --agent "<name>" labels it when ba can't tell
   read <chat>                         mark as read
   remind <chat> --when <timestamp> [--dismiss-on-message]
   unremind <chat>
@@ -994,7 +1028,7 @@ A file named mode in the state folder does the same, and the stricter of the two
 //   readonly  read only
 const ALLOWED = {
   readonly: new Set(['check', 'accounts', 'mode', 'triage', 'chat', 'find', 'who', 'mind', 'search', 'media', 'pending', 'outbox', 'dismiss', 'undismiss', 'notes']),
-  drafts: new Set(['check', 'accounts', 'mode', 'triage', 'chat', 'find', 'who', 'mind', 'search', 'media', 'pending', 'outbox', 'draft', 'skip', 'tidy', 'place', 'notes', 'note']),
+  drafts: new Set(['check', 'accounts', 'mode', 'triage', 'chat', 'find', 'who', 'mind', 'search', 'media', 'pending', 'outbox', 'draft', 'suggest', 'skip', 'tidy', 'place', 'notes', 'note']),
 };
 const RANK = { readonly: 0, drafts: 1, full: 2 };
 function modeFromEnv() {
@@ -1028,7 +1062,7 @@ async function cmdAccounts() {
   for (const a of rows) console.log(`${a.accountID ?? a.id}  ${networkName(a.network ?? (a.bridge && a.bridge.id) ?? '')}`);
 }
 
-const COMMANDS = { check: cmdCheck, accounts: cmdAccounts, triage: cmdTriage, chat: cmdChat, find: cmdFind, who: cmdWho, mind: cmdMind, same: (a) => cmdSameOrDifferent('same', a), different: (a) => cmdSameOrDifferent('different', a), search: cmdSearch, media: cmdMedia, dismiss: cmdDismiss, undismiss: cmdUndismiss, draft: cmdDraft, send: cmdSend, read: cmdRead, react: cmdReact, remind: cmdRemind, unremind: cmdUnremind, edit: cmdEdit, delete: cmdDelete, group: cmdGroup, start: cmdStart, contact: cmdContact, pending: cmdPending, skip: cmdSkip, tidy: cmdTidy, outbox: cmdOutbox, place: cmdPlace, mode: cmdMode, notes: cmdNotes, note: cmdNote };
+const COMMANDS = { check: cmdCheck, accounts: cmdAccounts, triage: cmdTriage, chat: cmdChat, find: cmdFind, who: cmdWho, mind: cmdMind, same: (a) => cmdSameOrDifferent('same', a), different: (a) => cmdSameOrDifferent('different', a), search: cmdSearch, media: cmdMedia, dismiss: cmdDismiss, undismiss: cmdUndismiss, draft: cmdDraft, suggest: cmdSuggest, send: cmdSend, read: cmdRead, react: cmdReact, remind: cmdRemind, unremind: cmdUnremind, edit: cmdEdit, delete: cmdDelete, group: cmdGroup, start: cmdStart, contact: cmdContact, pending: cmdPending, skip: cmdSkip, tidy: cmdTidy, outbox: cmdOutbox, place: cmdPlace, mode: cmdMode, notes: cmdNotes, note: cmdNote };
 
 async function main() {
   const [name, ...rest] = process.argv.slice(2);
