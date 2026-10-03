@@ -72,6 +72,7 @@ export function participantTotal(chat) {
 const FILTER_FLAGS = ['--no-archived', '--no-muted', '--no-low-priority'];
 
 export async function listChats({ limit = 200, unread = false, filtered = true } = {}) {
+  if (loginSource && !unread) return listChatsOverApi({ limit, filtered });
   const args = ['chats', 'list', '--limit', String(limit)];
   if (filtered) args.push(...FILTER_FLAGS);
   if (unread) args.push('--unread');
@@ -88,6 +89,46 @@ export async function listChatsSince(cutoffMs, { start = 800, max = 3200 } = {})
     if (complete) return { chats, truncated: chats.length >= limit && oldest >= cutoffMs };
     limit *= 2;
   }
+}
+
+// The CLI's chat lists, read from the API by an app that holds its own login. Both page
+// GET /v1/chats newest first; filtered drops archived, muted, and low-priority Chats, as the
+// CLI's flags do. Checked against the CLI on 2026-10-02: the same Chats in the same order.
+const API_PAGE = 200; // Beeper refuses more than 200 per page
+export async function listChatsOverApi({ limit = 200, filtered = true } = {}) {
+  const chats = [];
+  const seen = new Set();
+  let cursor = null;
+  while (chats.length < limit) {
+    const q = new URLSearchParams({ limit: String(API_PAGE) });
+    if (cursor) { q.set('cursor', cursor); q.set('direction', 'before'); }
+    const res = await apiOnce('GET', `/v1/chats?${q}`, undefined, { timeoutMs: 30_000 });
+    if (!res.ok) throw new BeeperError(`Chats unavailable: ${res.error}`);
+    const page = asList(res.data).filter((c) => c && !seen.has(c.id) && seen.add(c.id));
+    chats.push(...(filtered ? page.filter((c) => !c.isArchived && !c.isMuted && !c.isLowPriority) : page));
+    if (!res.data.hasMore || !res.data.oldestCursor || !page.length) break;
+    cursor = res.data.oldestCursor;
+  }
+  return chats.slice(0, limit);
+}
+
+// Archived Chats only, as `chats list --archived` gives them. The archive inbox of Beeper's
+// chat search is the same list, read without paging through every Chat.
+export async function listArchivedChats({ limit = 400 } = {}) {
+  if (!loginSource) return asList(await runBeeper(['chats', 'list', '--limit', String(limit), '--archived']));
+  const chats = [];
+  let cursor = null;
+  while (chats.length < limit) {
+    const q = new URLSearchParams({ inbox: 'archive', limit: String(API_PAGE) });
+    if (cursor) { q.set('cursor', cursor); q.set('direction', 'before'); }
+    const res = await apiOnce('GET', `/v1/chats/search?${q}`, undefined, { timeoutMs: 30_000 });
+    if (!res.ok) throw new BeeperError(`Archived chats unavailable: ${res.error}`);
+    const page = asList(res.data);
+    chats.push(...page);
+    if (!res.data.hasMore || !res.data.oldestCursor || !page.length) break;
+    cursor = res.data.oldestCursor;
+  }
+  return chats.slice(0, limit);
 }
 
 export async function showChat(selector) {
@@ -117,7 +158,21 @@ export async function searchChats(query, { limit = 20 } = {}) {
 // runs. Either one reads the login again, and only when it changed does the request go once
 // more. Every other failure gets no second try, a 500 or another 401 included.
 let login = null;
+// An app that holds its own Beeper login sets this, and then nothing here starts the CLI:
+// lists go to the API too. read() gives { baseURL, token } or throws. rejected(login) hears
+// that Beeper refused that token, so the app can ask for a new approval.
+let loginSource = null;
+export function setLoginSource(source) {
+  loginSource = source;
+  login = null;
+}
 function readLogin() {
+  // The app keeps its own login and changes it on Connect and Disconnect, so it is asked
+  // every time: a kept copy could outlive a Disconnect.
+  if (loginSource) return Promise.resolve().then(() => loginSource.read()).then((t) => {
+    if (!t || !t.baseURL || !t.token) throw new BeeperError('Beeper Companion is not connected to Beeper');
+    return { baseURL: String(t.baseURL).replace(/\/$/, ''), token: String(t.token) };
+  });
   if (login) return login;
   // Bounded, since a send waits on it. The read takes about a second.
   const read = runBeeper(['status'], { timeoutMs: 15_000 }).then((data) => {
@@ -163,16 +218,18 @@ export async function apiOnce(method, path, body, { timeoutMs = 60_000 } = {}) {
   let last = await attempt(used, method, path, body, timeoutMs);
   if (!last.untouched) return last.result;
   if (login === kept) login = null;
+  if (last.untouched === 'token') loginSource?.rejected?.(used);
   const fresh = await readLogin().catch(() => null);
   if (fresh && (fresh.token !== used.token || fresh.baseURL !== used.baseURL)) last = await attempt(fresh, method, path, body, timeoutMs);
   // The CLI saves its login at setup and never reads Beeper's again, so only setup fixes a refused token.
-  return last.untouched === 'token' ? { ...last.result, error: `${last.result.error}. Run: beeper setup` } : last.result;
+  return last.untouched === 'token' && !loginSource ? { ...last.result, error: `${last.result.error}. Run: beeper setup` } : last.result;
 }
 
 // Reads that run many times in a row go straight to the local API. Starting the CLI
 // for each one costs far more than the request itself. Falls back to the CLI on any trouble.
 export async function listMessagesFast(chatID, { limit = 8 } = {}) {
   const res = await apiOnce('GET', `/v1/chats/${encodeURIComponent(chatID)}/messages`, undefined, { timeoutMs: 10_000 });
+  if (!res.ok && loginSource) throw new BeeperError(`Messages unavailable: ${res.error}`);
   if (!res.ok) return listMessages(chatID, { limit });
   const all = asList(res.data).slice().sort((a, b) => String(a.sortKey || a.timestamp).localeCompare(String(b.sortKey || b.timestamp), 'en', { numeric: true }));
   return all.slice(-limit);
