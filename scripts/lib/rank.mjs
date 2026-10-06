@@ -95,26 +95,55 @@ function baseClass(r) {
   return 'nothing';
 }
 
+// What set a judged row's class when the verdict alone did not. Alone, urgent gives urgent,
+// else yes gives waiting, no nothing, and unsure unsure. The companion's Triage snapshot keeps
+// the cause beside the Judgment, to measure both against what the Owner answers.
+// - owner-wrote-last: the Owner spoke last, so nothing is owed.
+// - marked-unread: the Owner marked it unread, so waiting where the verdict and the rules
+//   below gave unsure or nothing, as for owed no, owed unsure, or a stranger's owed yes.
+// - closeness: urgent needs someone close or known, and waiting someone the Owner has written
+//   to. The class and the verdict's urgent tell which one applied.
+// - urgent-lapsed: the urgent verdict passed its expiry.
+// - low-answer-rate: waiting moved to unsure because the Owner seldom answers this Chat.
+// - rules: the verdict's owed was not one the rank knows, so the rules ranked it.
+// One cause per row: the last rule that moved the class wins.
+export const CAUSES = ['owner-wrote-last', 'marked-unread', 'closeness', 'urgent-lapsed', 'low-answer-rate', 'rules'];
+
 // A model's verdict, when the companion has one, outranks the rules on what is owed. It
-// cannot make a stranger urgent, and an urgent verdict lapses at its expiry.
+// cannot make a stranger urgent, and an urgent verdict lapses at its expiry. A Chat the Owner
+// marked unread is waiting whatever the verdict and the Closeness, or urgent when the verdict
+// says so of someone close or known. Returns the class and its cause from CAUSES, or null.
 function judgedClass(r, j, now) {
+  const [cls, cause] = verdictClass(r, j, now);
+  if (markedByOwner(r) && (cls === 'unsure' || cls === 'nothing')) return ['waiting', 'marked-unread'];
+  return [cls, cause];
+}
+
+// The class the verdict gives before the Owner's unread mark is applied. The mark also lifts
+// the guard on the Owner writing last: a Chat the Owner wrote last and marked unread still
+// counts as marked.
+function verdictClass(r, j, now) {
   const knows = r.closeness === 'close' || r.closeness === 'known';
-  if (r.lastFrom === 'me' && !markedByOwner(r)) return 'nothing';
-  if (j.owed === 'no') return markedByOwner(r) ? 'waiting' : 'nothing';
-  if (j.urgent && knows && r.type !== 'group' && !(j.expiresAt && Date.parse(j.expiresAt) <= now)) return 'urgent';
-  if (j.owed === 'unsure') return 'unsure';
-  if (j.owed === 'yes') return KNOWS.has(r.closeness) || r.pinned ? 'waiting' : 'unsure';
-  return baseClass(r);
+  if (r.lastFrom === 'me' && !markedByOwner(r)) return ['nothing', j.owed === 'no' && !j.urgent ? null : 'owner-wrote-last'];
+  if (j.owed === 'no') return ['nothing', null];
+  const lapsed = Boolean(j.expiresAt && Date.parse(j.expiresAt) <= now);
+  if (j.urgent && knows && r.type !== 'group' && !lapsed) return ['urgent', null];
+  // An urgent verdict that did not hold: past its expiry, or about someone not close enough.
+  const dropped = j.urgent ? (lapsed ? 'urgent-lapsed' : 'closeness') : null;
+  if (j.owed === 'unsure') return ['unsure', dropped];
+  if (j.owed === 'yes') return KNOWS.has(r.closeness) || r.pinned ? ['waiting', dropped] : ['unsure', 'closeness'];
+  return [baseClass(r), 'rules'];
 }
 
 // Rows need `closeness`, `want`, and the cue flags set first. `stats` holds the Chat's counts
 // and answer rate; `stranger` the answer rate for strangers on its network. `judgment` is a
-// model's read of the row: { owed, want, urgent, urgentKind, expiresAt, gist }.
+// model's read of the row: { owed, want, urgent, urgentKind, expiresAt, gist }. A judged row's
+// rank also gets `cause`, one of CAUSES or null.
 export function rankRow(r, { now = Date.now(), stats = null, stranger = null, judgment = null } = {}) {
   const factors = [];
   const add = (name, points) => { if (points) factors.push({ name, points }); };
   if (judgment && WANTS.includes(judgment.want)) r.want = judgment.want;
-  let cls = judgment ? judgedClass(r, judgment, now) : baseClass(r);
+  let [cls, cause] = judgment ? judgedClass(r, judgment, now) : [baseClass(r), null];
   const knows = KNOWS.has(r.closeness);
   // Urgent from the rules needs someone the Owner knows well and a fresh time word.
   // A stranger saying "urgent" does not meet the bar.
@@ -142,9 +171,10 @@ export function rankRow(r, { now = Date.now(), stats = null, stranger = null, ju
   if ((r.messages || 0) >= 3) add('several', 2);
   if (r.hasDraft) add('draft', -3);
   // Someone the Owner seldom answers drops out of waiting. Never out of urgent.
-  if (cls === 'waiting' && share !== null && share < 0.2 && stats.runs >= 5 && !markedByOwner(r)) cls = 'unsure';
+  if (cls === 'waiting' && share !== null && share < 0.2 && stats.runs >= 5 && !markedByOwner(r)) { cls = 'unsure'; cause = 'low-answer-rate'; }
   const score = Math.max(0, Math.min(100, factors.reduce((s, f) => s + f.points, 0)));
   r.rank = { class: cls, score, closeness: r.closeness, want: r.want, factors, judged: !!judgment };
+  if (judgment) r.rank.cause = cause;
   if (judgment && judgment.gist) r.rank.gist = String(judgment.gist).replace(/\s+/g, ' ').trim().slice(0, 90);
   if (cls === 'urgent' && judgment && judgment.urgentKind) r.rank.urgentKind = judgment.urgentKind;
   return r;

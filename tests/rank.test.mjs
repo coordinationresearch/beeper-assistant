@@ -1,7 +1,7 @@
 // Ranking the Triage list. Made-up rows and counts only.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { CLASSES, closenessOf, compactCount, rankRows, wantOf } from '../scripts/lib/rank.mjs';
+import { CAUSES, CLASSES, closenessOf, compactCount, rankRows, wantOf } from '../scripts/lib/rank.mjs';
 import { answerRate } from '../scripts/lib/history.mjs';
 
 const NOW = Date.parse('2026-09-27T20:00:00Z');
@@ -202,6 +202,91 @@ test('an urgent judgment lapses at its expiry, and never makes a stranger urgent
   assert.equal(rows.find((r) => r.id === 's').rank.class, 'unsure');
 });
 
+test('a judged row names what set its class when the judgment alone did not, and a rules row names nothing', () => {
+  const ids = ['plain', 'no', 'hot', 'marked', 'seldom', 'stranger', 'lapsed', 'light', 'unsure-lapsed', 'unsure-light', 'odd', 'mine', 'mine-no', 'unjudged'];
+  const rows = ids.map((id) => row({ id, markedUnread: id === 'marked', texts: id === 'marked' ? ['saw this'] : undefined }));
+  for (const r of rows) if (r.id.startsWith('mine')) r.lastFrom = 'me';
+  const yes = { owed: 'yes', want: 'ask', urgent: false };
+  const past = new Date(NOW - HOUR).toISOString(), later = new Date(NOW + HOUR).toISOString();
+  const judgments = new Map([['plain', yes], ['no', { owed: 'no', want: 'fyi', urgent: false }], ['hot', { ...yes, urgent: true, expiresAt: later }],
+    ['marked', { owed: 'no', want: 'fyi', urgent: false }], ['seldom', yes], ['stranger', yes],
+    ['lapsed', { ...yes, urgent: true, expiresAt: past }], ['light', { ...yes, urgent: true }],
+    ['unsure-lapsed', { owed: 'unsure', want: 'ask', urgent: true, expiresAt: past }], ['unsure-light', { owed: 'unsure', want: 'ask', urgent: true }],
+    ['odd', { owed: 'maybe', want: 'ask', urgent: false }], ['mine', yes], ['mine-no', { owed: 'no', want: 'fyi', urgent: false }]]);
+  const stats = Object.fromEntries(ids.map((id) => [id, CLOSE]));
+  Object.assign(stats, { seldom: counts({ owner: 12, theirs: 15, runs: 10, answered: 1 }), stranger: NEW, light: LIGHT, 'unsure-light': LIGHT });
+  rank(rows, stats, { judgments });
+  const by = Object.fromEntries(rows.map((r) => [r.id, [r.rank.class, r.rank.cause]]));
+  assert.deepEqual(by, {
+    plain: ['waiting', null],
+    no: ['nothing', null],
+    hot: ['urgent', null],
+    marked: ['waiting', 'marked-unread'],
+    seldom: ['unsure', 'low-answer-rate'],
+    stranger: ['unsure', 'closeness'],
+    lapsed: ['waiting', 'urgent-lapsed'],
+    light: ['waiting', 'closeness'],
+    'unsure-lapsed': ['unsure', 'urgent-lapsed'],
+    'unsure-light': ['unsure', 'closeness'],
+    odd: ['waiting', 'rules'],
+    mine: ['nothing', 'owner-wrote-last'],
+    'mine-no': ['nothing', null],
+    unjudged: ['waiting', undefined],
+  });
+  for (const r of rows.filter((x) => x.id !== 'unjudged')) assert.ok('cause' in r.rank && (r.rank.cause === null || CAUSES.includes(r.rank.cause)), r.id);
+  assert.equal('cause' in rows.find((r) => r.id === 'unjudged').rank, false, '`ba triage` passes no judge, so its rows are unchanged');
+});
+
+test('a Chat the Owner marked unread is waiting whatever the Judgment and the Closeness, and a stranger is never urgent', () => {
+  const later = new Date(NOW + HOUR).toISOString(), past = new Date(NOW - HOUR).toISOString();
+  const verdicts = { no: { owed: 'no', want: 'fyi', urgent: false }, unsure: { owed: 'unsure', want: 'ask', urgent: false }, yes: { owed: 'yes', want: 'ask', urgent: false },
+    urgent: { owed: 'yes', want: 'ask', urgent: true, expiresAt: later }, 'unsure-urgent': { owed: 'unsure', want: 'ask', urgent: true, expiresAt: later },
+    lapsed: { owed: 'unsure', want: 'ask', urgent: true, expiresAt: past } };
+  const people = { close: CLOSE, known: KNOWN, light: LIGHT, new: NEW, unknown: null };
+  const rows = [], judgments = new Map(), stats = {};
+  for (const [who, s] of Object.entries(people)) for (const [v, j] of Object.entries(verdicts)) {
+    const id = `${who}-${v}`;
+    rows.push(row({ id, markedUnread: true }));
+    judgments.set(id, j);
+    if (s) stats[id] = s;
+  }
+  rank(rows, stats, { judgments });
+  const by = Object.fromEntries(rows.map((r) => [r.id, [r.rank.closeness, r.rank.class, r.rank.cause]]));
+  const mark = (who) => [who, 'waiting', 'marked-unread'];
+  const knows = (who) => ({ [`${who}-no`]: mark(who), [`${who}-unsure`]: mark(who), [`${who}-yes`]: [who, 'waiting', null],
+    [`${who}-urgent`]: [who, 'urgent', null], [`${who}-unsure-urgent`]: [who, 'urgent', null], [`${who}-lapsed`]: mark(who) });
+  const stranger = (who) => Object.fromEntries(Object.keys(verdicts).map((v) => [`${who}-${v}`, mark(who)]));
+  assert.deepEqual(by, {
+    ...knows('close'), ...knows('known'),
+    'light-no': mark('light'), 'light-unsure': mark('light'), 'light-yes': ['light', 'waiting', null],
+    'light-urgent': ['light', 'waiting', 'closeness'], 'light-unsure-urgent': mark('light'), 'light-lapsed': mark('light'),
+    ...stranger('new'), ...stranger('unknown'),
+  });
+  for (const r of rows) assert.equal(/you marked it unread/.test(r.rank.reason), r.rank.class !== 'urgent', r.id);
+});
+
+test('the mark holds when the Owner wrote last, a group is never urgent, and a mark Beeper set changes nothing', () => {
+  const rows = [row({ id: 'mine', markedUnread: true }), row({ id: 'group', type: 'group', markedUnread: true }),
+    row({ id: 'beeper', unread: 2, markedUnread: true }), row({ id: 'plain' })];
+  rows[0].lastFrom = 'me';
+  const judgments = new Map([['mine', { owed: 'unsure', want: 'ask', urgent: false }], ['group', { owed: 'yes', want: 'ask', urgent: true, expiresAt: new Date(NOW + HOUR).toISOString() }],
+    ['beeper', { owed: 'yes', want: 'ask', urgent: false }], ['plain', { owed: 'unsure', want: 'ask', urgent: false }]]);
+  rank(rows, { mine: KNOWN, group: CLOSE, beeper: NEW, plain: KNOWN }, { judgments });
+  const by = Object.fromEntries(rows.map((r) => [r.id, [r.rank.class, r.rank.cause]]));
+  assert.deepEqual(by, { mine: ['waiting', 'marked-unread'], group: ['waiting', 'closeness'], beeper: ['unsure', 'closeness'], plain: ['unsure', null] });
+});
+
+test('the mark keeps a Chat waiting even when the Owner seldom answers it', () => {
+  const seldom = counts({ owner: 12, theirs: 15, runs: 10, answered: 1 });
+  const seldomStranger = counts({ owner: 0, theirs: 15, runs: 10, answered: 1 });
+  const rows = [row({ id: 'u', markedUnread: true }), row({ id: 'n', markedUnread: true }), row({ id: 'y', markedUnread: true }), row({ id: 's', markedUnread: true })];
+  const judgments = new Map([['u', { owed: 'unsure', want: 'ask', urgent: false }], ['n', { owed: 'no', want: 'fyi', urgent: false }],
+    ['y', { owed: 'yes', want: 'ask', urgent: false }], ['s', { owed: 'yes', want: 'ask', urgent: false }]]);
+  rank(rows, { u: seldom, n: seldom, y: seldom, s: seldomStranger }, { judgments });
+  const by = Object.fromEntries(rows.map((r) => [r.id, [r.rank.class, r.rank.cause]]));
+  assert.deepEqual(by, { u: ['waiting', 'marked-unread'], n: ['waiting', 'marked-unread'], y: ['waiting', null], s: ['waiting', 'marked-unread'] });
+});
+
 test('groups rank on mentions and how much the Owner writes there', () => {
   const rows = [row({ id: 'g1', type: 'group', mentions: 1, texts: ['@owner thoughts?'] }), row({ id: 'g2', type: 'group', texts: ['anyone up for dinner friday?'] })];
   rank(rows, { g1: counts({ owner: 2, theirs: 300 }), g2: counts({ owner: 40, theirs: 60, owner90: 30, ownerWeeks26: 8 }) });
@@ -215,7 +300,7 @@ test('counts read short', () => {
   assert.deepEqual([12, 1234, 1000, 23_456].map(compactCount), ['12', '1.2k', '1k', '23k']);
 });
 
-test('a Chat where the Owner wrote last owes nothing, whatever the unread mark says', () => {
+test('a Chat where the Owner wrote last owes nothing, whatever the unread count says', () => {
   const rows = [row({ id: 'mine', unread: 1, texts: ['could meet you around 9:15 tomorrow?'] })];
   rows[0].lastFrom = 'me';
   rank(rows, { mine: CLOSE }, { judgments: new Map() });
