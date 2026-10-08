@@ -11,6 +11,11 @@ export class BeeperError extends Error {
     this.detail = detail;
   }
 }
+// A failed API request as an error. Its detail holds the HTTP status, 0 when none came back,
+// and then the reason: refused, timeout, or network. The companion labels a job failure by them.
+export function apiError(message, res) {
+  return new BeeperError(message, { status: res.status, ...(res.reason ? { reason: res.reason } : {}) });
+}
 
 const BIN = () => process.env.BEEPER_BIN || 'beeper';
 
@@ -90,7 +95,7 @@ export function startUser(to) {
 }
 async function api(method, path, body, timeoutMs) {
   const res = await apiOnce(method, path, body, { timeoutMs });
-  if (!res.ok) throw new BeeperError(res.error || `${method} ${path} failed`, { status: res.status });
+  if (!res.ok) throw apiError(res.error || `${method} ${path} failed`, res);
   return res.data;
 }
 // Messages newest first, as the CLI lists them, paging back until `limit`.
@@ -202,7 +207,7 @@ export async function listChatsOverApi({ limit = 200, filtered = true } = {}) {
     const q = new URLSearchParams({ limit: String(API_PAGE) });
     if (cursor) { q.set('cursor', cursor); q.set('direction', 'before'); }
     const res = await apiOnce('GET', `/v1/chats?${q}`, undefined, { timeoutMs: 30_000 });
-    if (!res.ok) throw new BeeperError(`Chats unavailable: ${res.error}`);
+    if (!res.ok) throw apiError(`Chats unavailable: ${res.error}`, res);
     const page = asList(res.data).filter((c) => c && !seen.has(c.id) && seen.add(c.id));
     chats.push(...(filtered ? page.filter((c) => !c.isArchived && !c.isMuted && !c.isLowPriority) : page));
     if (!res.data.hasMore || !res.data.oldestCursor || !page.length) break;
@@ -221,7 +226,7 @@ export async function listArchivedChats({ limit = 400 } = {}) {
     const q = new URLSearchParams({ inbox: 'archive', limit: String(API_PAGE) });
     if (cursor) { q.set('cursor', cursor); q.set('direction', 'before'); }
     const res = await apiOnce('GET', `/v1/chats/search?${q}`, undefined, { timeoutMs: 30_000 });
-    if (!res.ok) throw new BeeperError(`Archived chats unavailable: ${res.error}`);
+    if (!res.ok) throw apiError(`Archived chats unavailable: ${res.error}`, res);
     const page = asList(res.data);
     chats.push(...page);
     if (!res.data.hasMore || !res.data.oldestCursor || !page.length) break;
@@ -298,10 +303,12 @@ async function attempt({ baseURL, token }, method, path, body, timeoutMs) {
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (e) {
-    if (e.cause && e.cause.code === 'ECONNREFUSED') return { result: { ok: false, status: 0, error: 'connection refused' }, untouched: 'connection' };
-    return { result: { ok: false, status: 0, error: e.name === 'TimeoutError' ? 'no answer in time' : String(e.message || e) } };
+    if (e.cause && e.cause.code === 'ECONNREFUSED') return { result: { ok: false, status: 0, error: 'connection refused', reason: 'refused' }, untouched: 'connection' };
+    return { result: broken(e, 0) };
   }
-  const text = await res.text();
+  // An answer can break off after its status: an error status is kept, a success is not one.
+  let text;
+  try { text = await res.text(); } catch (e) { return { result: broken(e, res.ok ? 0 : res.status) }; }
   let data = null;
   try { data = text ? JSON.parse(text) : null; } catch { /* not JSON */ }
   if (res.ok) return { result: { ok: true, status: res.status, data } };
@@ -310,7 +317,14 @@ async function attempt({ baseURL, token }, method, path, body, timeoutMs) {
   return { result, untouched: res.status === 401 && data && data.code === 'unauthorized' ? 'token' : null };
 }
 
-/** @returns {Promise<{ ok: boolean, status: number, data?: any, error?: string }>} */
+// A request that broke before a whole answer came back, and why: no answer in time, which our
+// own timeout signal or Node's connect, headers, and body timeouts give, or any other network failure.
+function broken(e, status) {
+  const timeout = e.name === 'TimeoutError' || e.name === 'AbortError' || /^(ETIMEDOUT|UND_ERR_\w*_TIMEOUT)$/.test(String((e.cause && e.cause.code) || ''));
+  return { ok: false, status, error: timeout ? 'no answer in time' : String(e.message || e), reason: timeout ? 'timeout' : 'network' };
+}
+
+/** @returns {Promise<{ ok: boolean, status: number, data?: any, error?: string, reason?: string }>} */
 // `before` is asked right before each attempt, after the login is read, so a write its caller
 // cancelled meanwhile never starts. A result with cancelled: true sent nothing.
 /**
@@ -340,7 +354,7 @@ export async function apiOnce(method, path, body, { timeoutMs = 60_000, before =
 // for each one costs far more than the request itself. Falls back to the CLI on any trouble.
 export async function listMessagesFast(chatID, { limit = 8 } = {}) {
   const res = await apiOnce('GET', `/v1/chats/${encodeURIComponent(chatID)}/messages`, undefined, { timeoutMs: 10_000 });
-  if (!res.ok && loginSource) throw new BeeperError(`Messages unavailable: ${res.error}`);
+  if (!res.ok && loginSource) throw apiError(`Messages unavailable: ${res.error}`, res);
   if (!res.ok) return listMessages(chatID, { limit });
   const all = asList(res.data).slice().sort((a, b) => String(a.sortKey || a.timestamp).localeCompare(String(b.sortKey || b.timestamp), 'en', { numeric: true }));
   return all.slice(-limit);
@@ -381,7 +395,7 @@ export async function searchMessages(opts, { max = 20, sinceMs = 0, keep = () =>
   const pages = Math.ceil(max / SEARCH_PAGE) * 2 + 3;
   for (let page = 0; page < pages; page++) {
     const res = await api('GET', searchPath({ ...opts, cursor }), undefined, { timeoutMs: 30_000 });
-    if (!res.ok) throw new BeeperError(`Search failed: ${res.error}`);
+    if (!res.ok) throw apiError(`Search failed: ${res.error}`, res);
     const d = res.data || {};
     Object.assign(chats, d.chats || {});
     let fresh = 0;

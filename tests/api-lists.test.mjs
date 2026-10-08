@@ -15,6 +15,12 @@ const server = createServer((req, res) => {
   seen.tokens.push(String(req.headers.authorization || ''));
   seen.paths.push(url.pathname);
   const json = (status, data) => { res.writeHead(status, { 'content-type': 'application/json' }); res.end(JSON.stringify(data)); };
+  // A Beeper still starting: one that answers 503, and one that never answers.
+  if (req.headers.authorization === 'Bearer starting') return json(503, { message: 'starting' });
+  if (req.headers.authorization === 'Bearer silent') return;
+  // An answer that breaks off after its status line.
+  const cut = /^Bearer cut-(\d+)$/.exec(String(req.headers.authorization));
+  if (cut) { res.writeHead(Number(cut[1]), { 'content-type': 'application/json', 'content-length': '100' }); res.write('{"items": [', () => res.socket.destroy()); return; }
   if (req.headers.authorization !== 'Bearer app-token') return json(401, { code: 'unauthorized' });
   const page = (list) => {
     const limit = Number(url.searchParams.get('limit')), start = Number(url.searchParams.get('cursor') || 0);
@@ -70,4 +76,33 @@ test('a login the app changes is read again on every request, so Disconnect take
   current = null;
   await assert.rejects(lib.apiOnce('GET', '/v1/chats?limit=1'), /not connected/);
   lib.setLoginSource({ read: () => ({ baseURL: HERE, token: 'app-token' }) });
+});
+
+test('a failed request carries its status, or why none came back, and never its text', async () => {
+  const fails = async (token, call, baseURL = HERE) => {
+    lib.setLoginSource({ read: () => ({ baseURL, token }) });
+    try { await call(); } catch (e) { return [e.name, e.detail]; } finally { lib.setLoginSource({ read: () => ({ baseURL: HERE, token: 'app-token' }) }); }
+    assert.fail('the call did not fail');
+  };
+  assert.deepEqual(await fails('starting', () => lib.listChats({ limit: 10 })), ['BeeperError', { status: 503 }]);
+  assert.deepEqual(await fails('starting', () => lib.listArchivedChats({ limit: 10 })), ['BeeperError', { status: 503 }]);
+  assert.deepEqual(await fails('starting', () => lib.listMessagesFast('chat-1')), ['BeeperError', { status: 503 }]);
+  assert.deepEqual(await fails('stale', () => lib.listMessagesFast('chat-1')), ['BeeperError', { status: 401 }]);
+  lib.setLoginSource({ read: () => ({ baseURL: HERE, token: 'silent' }) });
+  const late = await lib.apiOnce('GET', '/v1/chats?limit=1', undefined, { timeoutMs: 50 });
+  assert.deepEqual([late.status, late.reason], [0, 'timeout']);
+  assert.deepEqual(lib.apiError('Chats unavailable', late).detail, { status: 0, reason: 'timeout' });
+  const closed = createServer();
+  await new Promise((resolve) => closed.listen(0, '127.0.0.1', resolve));
+  const gone = `http://127.0.0.1:${closed.address().port}`;
+  await new Promise((resolve) => closed.close(resolve));
+  assert.deepEqual(await fails('app-token', () => lib.listChats({ limit: 10 }), gone), ['BeeperError', { status: 0, reason: 'refused' }]);
+  // Broken off after the status: an error status is kept, and a success is not counted as one.
+  assert.deepEqual(await fails('cut-503', () => lib.listChats({ limit: 10 })), ['BeeperError', { status: 503, reason: 'network' }]);
+  assert.deepEqual(await fails('cut-200', () => lib.listChats({ limit: 10 })), ['BeeperError', { status: 0, reason: 'network' }]);
+  // Node's own connect timeout is a timeout too, not a network failure.
+  const real = globalThis.fetch;
+  globalThis.fetch = async () => { throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'UND_ERR_CONNECT_TIMEOUT' } }); };
+  try { assert.deepEqual(await fails('app-token', () => lib.listChats({ limit: 10 })), ['BeeperError', { status: 0, reason: 'timeout' }]); }
+  finally { globalThis.fetch = real; }
 });
