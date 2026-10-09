@@ -17,7 +17,6 @@ export function replyProblem(reply, loaded) {
   const steps = reply && reply.steps;
   if (!Array.isArray(steps) || !steps.length) return 'empty';
   if (steps.length > REPLY_LIMITS.steps) return 'too-many-steps';
-  if (!steps.some((step) => step && step.kind === 'message')) return 'no-message';
   let reactions = 0, waited = 0;
   for (const [i, step] of steps.entries()) {
     if (!step || typeof step !== 'object') return 'bad-step';
@@ -40,7 +39,6 @@ export function replyProblem(reply, loaded) {
 export const REPLY_PROBLEMS = Object.freeze({
   'empty': 'The reply has no steps.',
   'too-many-steps': `A reply holds at most ${REPLY_LIMITS.steps} steps.`,
-  'no-message': 'A reply needs at least one message.',
   'bad-step': 'Each step is {"say": "…"}, {"react": "<message>", "key": "❤️"}, or {"wait": "20s"}.',
   'bad-wait': 'Waits go between steps, at least 1 s and at most 5 min each. Nothing waits before the first step.',
   'bad-message': `Each message needs text, at most ${REPLY_LIMITS.messageChars} characters.`,

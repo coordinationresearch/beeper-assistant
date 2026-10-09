@@ -81,3 +81,13 @@ test('a link or a FIFO in place of the file reads as no suggestion, without wait
   assert.equal(readSuggestion(chat, { dir }), null, 'a FIFO, returned at once');
   rmSync(file, { force: true });
 });
+
+test('a reaction-only suggestion needs a known target and no invented message', async () => {
+  const steps = await stepsFromAgent([{ react: 'm1a2b3c4', key: '❤️' }], resolve);
+  assert.equal(replyProblem({ steps }, new Set(['msg-1'])), null);
+  assert.equal(replyProblem({ steps }, new Set()), 'unknown-target');
+  assert.equal(replyProblem({ steps: [] }, new Set()), 'empty');
+  const chat = '!reaction-only:beeper.local';
+  writeSuggestion(chat, { steps, forMessageID: 'msg-1', author: 'An agent', dir, now: new Date('2026-10-09T12:00:00Z') });
+  assert.deepEqual(readSuggestion(chat, { dir }).steps, steps);
+});

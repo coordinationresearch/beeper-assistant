@@ -2,7 +2,7 @@
 // snapshot run the same steps. Nothing here writes.
 import { strangerKey } from './history.mjs';
 import { rankRows } from './rank.mjs';
-import { DEFAULT_WINDOW_DAYS, applyContext, buildTriage, capTriage, filterTriage, wantsHistory } from './triage.mjs';
+import { DEFAULT_WINDOW_DAYS, applyContext, buildTriage, capTriage, filterTriage, latestInboundAt, wantsHistory } from './triage.mjs';
 
 const DAY = 86_400_000;
 
@@ -30,6 +30,14 @@ export async function collectTriage(reads, { now = Date.now(), windowDays = DEFA
   await Promise.all(Array.from({ length: 8 }, async () => {
     for (let r = queue.shift(); r && !(signal && signal.aborted); r = queue.shift()) {
       try { applyContext(r, await reads.messages(r.id, 20), { now }); } catch { /* keep the preview */ }
+    }
+  }));
+  // A group's preview can be a reaction, a notice, or the Owner's own message. Read back for
+  // their newest real message, for the companion's count of what is new. Its rank is unchanged.
+  const groups = t.groups.filter((r) => !r.lastInboundAt);
+  await Promise.all(Array.from({ length: 4 }, async () => {
+    for (let r = groups.shift(); r && !(signal && signal.aborted); r = groups.shift()) {
+      try { r.lastInboundAt = latestInboundAt(await reads.messages(r.id, 20)); } catch { /* stays unknown */ }
     }
   }));
   if (signal && signal.aborted) throw new Error('Interrupted');

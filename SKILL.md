@@ -97,7 +97,7 @@ A chat holds one draft. `ba draft` refuses to replace a draft it did not write u
 
 ### Post the reply to the sidebar
 
-When the Owner runs Beeper Companion, post the reply to its sidebar instead of saving a draft: `ba suggest <chat> --text "…"`. The sidebar puts it in Beeper's compose box when the Owner opens that chat and labels it with your name. Nothing sends until the Owner presses Send there. A newer message in the chat retires it, so post right after you read the chat.
+When the Owner runs Beeper Companion, post the reply to its sidebar instead of saving a draft: `ba suggest <chat> --text "…"`. The sidebar labels it with your name and can place its first text message in Beeper's compose box when the Owner opens that chat. A reaction-only reply has no Draft and leaves the compose box unchanged. Nothing sends until the Owner presses Send there. A newer message in the chat retires it, so post right after you read the chat.
 
 A reply can come in steps, the way people text: a tapback, a quick answer, then the longer thought a few seconds later. Write one only when that is how the Owner answers this person:
 
@@ -128,7 +128,9 @@ For "how often do I talk to Sam", "who usually reaches out", or "how long do I t
 
 ## The Owner's Mind map
 
-For "what am I into lately", "what have I been spending my time on", or a question about the Owner's own pursuits and views, run `ba mind`. With the Beeper Companion on this Mac it prints the Mind map: the areas of the Owner's life their own messages point to, each with its share of their recent claims, and every claim under it. A claim is a short phrase drawn from one message the Owner wrote and checked against that message's conversation. Without the Companion it says there is none yet.
+For "what am I into lately", "what have I been spending my time on", or a question about the Owner's own pursuits and views, run `ba mind`. With the Beeper Companion on this Mac it prints a summary of the Mind map: the areas of the Owner's life their own messages point to, each with its share of their recent claims, claims by month, and its newest claims. A claim is a short phrase drawn from one message the Owner wrote and checked against that message's conversation. Without the Companion it says there is none yet.
+
+- `ba mind --area <words>` lists every claim under matching Areas, `--since <YYYY-MM>` keeps claims from that month on, and `--grep <words>` finds claims that contain the words. They combine. `--all` prints the whole file.
 
 - An Area or Interest title is a label the Mind map chose. It is not a fact about the Owner. Never state a role, title, employer, or identity unless a claim of kind `self` says it.
 - Every claim ends with the Corpus key of its message. Before you quote a claim or build on it, read the message with `ba mind --receipt <key>`. If it is gone, leave the claim out.

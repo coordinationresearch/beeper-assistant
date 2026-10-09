@@ -3,8 +3,9 @@ import { test } from 'node:test';
 import { buildIndex } from '../scripts/lib/contacts.mjs';
 import { dismiss, isDismissed } from '../scripts/lib/state.mjs';
 import { looksLikeAck } from '../scripts/lib/triage.mjs';
-import { applyContext, buildTriage, chatName, draftText, finalizeTriage, handlesOf, htmlToText, isAutomated, isSelfChat, looksAutomatedText, looksLikeReaction, previewKind, previewText, selfHandles, selfNames, senderLabel, tidyLinks, trailingInbound, wantsContext } from '../scripts/lib/triage.mjs';
+import { applyContext, buildTriage, chatName, draftKind, draftText, finalizeTriage, handlesOf, htmlToText, isAutomated, isSelfChat, looksAutomatedText, looksLikeReaction, previewKind, previewText, selfHandles, selfNames, senderLabel, tidyLinks, trailingInbound, wantsContext } from '../scripts/lib/triage.mjs';
 import { ME } from './fixtures.mjs';
+import { collectTriage } from '../scripts/lib/triage-run.mjs';
 import { CONTACT_ROWS, NOW, chat, person } from './fixtures.mjs';
 
 const contacts = buildIndex(CONTACT_ROWS);
@@ -384,4 +385,46 @@ test('a request followed by thanks still counts as a request', () => {
   applyContext(only.people[0], [msg('me', 'see you at 6'), msg('them', 'perfect'), msg('them', 'ok')], { now: NOW });
   assert.equal(only.people[0].kind, 'ack');
   assert.equal(finalizeTriage(only).people.length, 0);
+});
+
+test('each row records when their newest message arrived, groups included', () => {
+  const at = (h) => new Date(NOW - h * 3_600_000).toISOString();
+  const t = build([chat({ title: 'Ann', lastFrom: 'them', text: 'dinner friday?', hoursAgo: 2 }),
+    chat({ title: 'Ben', unread: 1, lastFrom: 'me', text: 'see you then', hoursAgo: 1 }),
+    chat({ title: 'Cy', unread: 1, lastFrom: 'them', text: 'Loved \u201cok\u201d', hoursAgo: 3 }),
+    chat({ title: 'Book club', type: 'group', unread: 4, lastFrom: 'them', text: 'who is hosting?', hoursAgo: 5 })], { finalize: false });
+  const row = (name) => [...t.people, ...t.groups].find((r) => r.name === name);
+  assert.equal(row('Ann').lastInboundAt, at(2));
+  assert.equal(row('Book club').lastInboundAt, at(5), 'a group, from its preview');
+  assert.equal(row('Ben').lastInboundAt, null, 'the newest is the Owner\'s');
+  assert.equal(row('Cy').lastInboundAt, null, 'a reaction is not a message');
+  // Reading the Chat finds their newest real message, even one the Owner answered after.
+  applyContext(row('Ben'), [msg('them', 'still on?', { timestamp: at(4) }), msg('me', 'see you then', { timestamp: at(1) })], { now: NOW });
+  assert.equal(row('Ben').lastInboundAt, at(4));
+  applyContext(row('Cy'), [msg('them', 'can you call?', { timestamp: at(6) }), msg('them', 'Loved \u201cok\u201d', { timestamp: at(3) })], { now: NOW });
+  assert.equal(row('Cy').lastInboundAt, at(6));
+});
+
+test('a row says whether its compose box holds text or attachments', () => {
+  assert.equal(draftKind({ draft: { text: '<p>on my way</p>' } }), 'text');
+  assert.equal(draftKind({ draft: { text: 'look', attachments: { a1: {} } } }), 'attachments');
+  assert.equal(draftKind({ draft: { text: '', attachments: {} } }), null);
+  assert.equal(draftKind({ draft: null }), null);
+  const t = build([chat({ title: 'Ann', lastFrom: 'them', draft: 'sure, 7?' }), chat({ title: 'Ben', lastFrom: 'them' })]);
+  assert.deepEqual(t.people.map((r) => [r.name, r.draftKind]), [['Ann', 'text'], ['Ben', null]]);
+});
+
+test('a group whose preview is not their message reads back for their newest one, and keeps its rank', async () => {
+  const at = (h) => new Date(NOW - h * 3_600_000).toISOString();
+  const chats = [chat({ id: '!club', title: 'Book club', type: 'group', unread: 2, mentions: 1, lastFrom: 'them', text: 'Loved \u201cwho hosts?\u201d', hoursAgo: 1 }),
+    chat({ id: '!team', title: 'Team', type: 'group', unread: 1, lastFrom: 'them', text: 'standup moved', hoursAgo: 3 })];
+  const read = [];
+  const reads = { chatsSince: async () => ({ chats, truncated: false }), contacts: async () => contacts, state: () => null,
+    messages: async (id) => { read.push(id); return [msg('them', 'who hosts friday?', { timestamp: at(2) }), msg('them', 'Loved \u201cwho hosts?\u201d', { timestamp: at(1) })]; } };
+  const t = await collectTriage(reads, { now: NOW });
+  const club = t.groups.find((r) => r.name === 'Book club'), team = t.groups.find((r) => r.name === 'Team');
+  assert.equal(club.lastInboundAt, at(2));
+  assert.equal(club.kind, 'reaction', 'the preview still ranks it');
+  assert.equal(team.lastInboundAt, at(3), 'a real message in the preview needs no read');
+  assert.deepEqual(read, ['!club']);
 });

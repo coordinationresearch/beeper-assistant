@@ -132,6 +132,9 @@ export function htmlToText(html) {
     .trim();
 }
 export const draftText = (chat) => htmlToText(chat && chat.draft && chat.draft.text);
+// What the compose box holds: 'attachments' when it holds any, else 'text', else null. Beeper
+// keys a draft's attachments in an object, which can be empty.
+export const draftKind = (chat) => (Object.keys((chat && chat.draft && chat.draft.attachments) || {}).length ? 'attachments' : draftText(chat) ? 'text' : null);
 
 export function clip(text, max = 160) {
   const t = String(text || '').replace(/\s+/g, ' ').trim();
@@ -217,10 +220,14 @@ export function toRow(chat, { now, contacts }) {
     kind,
     reaction: kind === 'reaction',
     hasDraft: !!(chat.draft && (draftText(chat) || chat.draft.attachments)),
+    draftKind: draftKind(chat),
     reminder: chat.reminder || null,
     account: chat.accountID || '',
     inContacts: !group && handlesOf(chat).some((h) => !!nameFor(contacts, h)),
     lastMessageID: pv.id || null,
+    // When their newest message arrived, or null when the newest is the Owner's, a reaction, or
+    // a notice. applyContext reads further back in one-to-one Chats.
+    lastInboundAt: !pv.isSender && !pv.isHidden && !NOT_A_MESSAGE.has(kind) ? pv.timestamp || chat.lastActivity || null : null,
   };
 }
 
@@ -241,6 +248,12 @@ export function trailingInbound(messages) {
   return { lastFrom: 'them', burst, more: burst.length === real.length };
 }
 
+// When their newest real message arrived, even one the Owner has answered since, or null.
+export function latestInboundAt(messages) {
+  const inbound = messages.filter((m) => !m.isSender && isReal(m)).at(-1);
+  return inbound && Date.parse(inbound.timestamp) ? inbound.timestamp : null;
+}
+
 // Rows worth a closer look: a short or odd preview, or several unread messages.
 export const wantsContext = (r) => r.type === 'single' && (r.kind !== 'text' || r.preview.length < 40 || r.unreadCount >= 2);
 // Every one-to-one row gets a look, to learn whether the Owner ever wrote there.
@@ -250,6 +263,7 @@ export function applyContext(row, messages, { now = Date.now(), shown = 4 } = {}
   const { lastFrom, burst, more } = trailingInbound(messages);
   // No message from the Owner anywhere in what was read: a stranger, or a one-sided chat.
   row.ownerSpoke = messages.some((m) => m.isSender && isReal(m));
+  row.lastInboundAt = latestInboundAt(messages) || row.lastInboundAt;
   if (lastFrom === null) return row;
   row.lastFrom = lastFrom;
   if (lastFrom === 'me') return row;

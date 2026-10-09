@@ -359,9 +359,51 @@ async function cmdMind({ flags }) {
   }
   const path = mindMapPath();
   if (!existsSync(path)) throw new UsageError('There is no Mind map on this Mac yet. The Beeper Companion builds one once its corpus has read the Owner\'s messages.');
-  const text = readFileSync(path, 'utf8');
+  const text = mindView(readFileSync(path, 'utf8'), flags);
   if (flags.json) { console.log(JSON.stringify({ path, text }, null, 1)); return; }
   console.log(`Mind map: ${path}\n\n${text}`);
+}
+
+// What `ba mind` prints from the file: with no flags, each Area's heading, trend, Interests, and
+// its newest claims, so an agent reads the shape of the map in a few thousand tokens. --area,
+// --since, and --grep print every claim that matches; --all prints the file as written.
+const MIND_NEWEST = 5;
+function mindView(text, flags = {}) {
+  if (flags.all) return text;
+  const lines = text.split('\n');
+  const first = lines.findIndex((l) => l.startsWith('## '));
+  const head = (first < 0 ? lines : lines.slice(0, first)).join('\n').trimEnd();
+  const sections = [];
+  for (const line of first < 0 ? [] : lines.slice(first)) {
+    if (line.startsWith('## ')) sections.push({ heading: line, title: line.slice(3).split(' · ')[0], meta: [], claims: [] });
+    else if (line.startsWith('- ')) sections.at(-1).claims.push(line);
+    else if (line.trim()) sections.at(-1).meta.push(line);
+  }
+  const area = flags.area ? String(flags.area).toLowerCase() : null;
+  const since = flags.since ? String(flags.since) : null;
+  const grep = flags.grep ? String(flags.grep).toLowerCase() : null;
+  const filtered = Boolean(area || since || grep);
+  // A title given whole matches only itself, as the hints below give it; otherwise any title
+  // holding the words.
+  const exact = area !== null && sections.some((s) => s.title.toLowerCase() === area);
+  // Single quotes, so a title with $, a backtick, or " can't run anything when a hint is pasted.
+  const shell = (t) => `'${t.replace(/'/g, "'\\''")}'`;
+  const out = [head];
+  for (const s of sections) {
+    if (area && !(exact ? s.title.toLowerCase() === area : s.title.toLowerCase().includes(area))) continue;
+    const claims = s.claims.filter((c) => (!since || c.slice(2, 12) >= since) && (!grep || c.toLowerCase().includes(grep)));
+    if (filtered && !claims.length) continue;
+    const loose = s.title === 'Not on an Area yet';
+    out.push('', s.heading, ...s.meta);
+    if (filtered) out.push(...claims);
+    else if (loose) out.push(`${claims.length} claim${claims.length === 1 ? '' : 's'} on no Area yet. ba mind --area ${shell(s.title)} lists them.`);
+    else {
+      out.push(...claims.slice(0, MIND_NEWEST));
+      if (claims.length > MIND_NEWEST) out.push(`… ${claims.length - MIND_NEWEST} more: ba mind --area ${shell(s.title)}`);
+    }
+  }
+  if (filtered && out.length === 1) out.push('', 'No claims match.');
+  return `${out.join('\n')}\n`;
 }
 
 // The Owner's answer about whether two People from who are one person. Only on the Owner's
@@ -970,7 +1012,8 @@ Read
   find <name | number | email>        every chat for a person. Add --all for groups they are in
   who <name | number | email>         one person on every network, with message counts, reply times, and
                                       who starts conversations. Needs the Beeper Companion's corpus; without it, runs find
-  mind [--receipt <key>]              the Owner's Mind map: Areas of their life and claims from their own messages.
+  mind [--area <text>] [--since <YYYY-MM>] [--grep <text>] [--all] [--receipt <key>]
+                                      the Owner's Mind map: Areas of their life and claims from their own messages.
                                       --receipt reads the message a claim cites. Needs the Beeper Companion
   search <words> [--chat <chat>] [--from me|them] [--media image] [--days N] [--max 20]
                                       messages that contain these words, across all chats
