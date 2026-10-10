@@ -80,6 +80,17 @@ test('mind --area, --since, and --grep print every claim that matches; --all pri
   assert.equal(run('--all').stdout, `Mind map: ${join(dir, 'mind-map.md')}\n\n${BIG}\n`);
 });
 
+test('mind reads the Talked about headings: --area and its hints use the title alone', () => {
+  const { dir, run } = setup();
+  const rule = 'What the Owner talks about, not where they work, what they belong to, or what they are.';
+  const lines = (n) => Array.from({ length: n }, (_, i) => `- 2026-09-0${i + 1} · did · Glaze claim ${i} · beeper:$g${i}`);
+  writeFileSync(join(dir, 'mind-map.md'), ['# Mind map', '', '## Talked about: Brightwater Studio · 100% lately · 6 claims', rule, ...lines(6), ''].join('\n'));
+  const out = run().stdout;
+  assert.match(out, /## Talked about: Brightwater Studio[^\n]*\nWhat the Owner talks about/);
+  assert.match(out, /… 1 more: ba mind --area 'Brightwater Studio'/);
+  assert.match(run('--area', 'Brightwater Studio').stdout, /Glaze claim 5/);
+});
+
 test('mind --area takes a whole title as given, and its hints quote titles safely', () => {
   const { dir, run } = setup();
   const claims = (t, n) => Array.from({ length: n }, (_, i) => `- 2026-09-0${i + 1} · did · ${t} claim ${i} · beeper:$${t[0]}${i}`);
