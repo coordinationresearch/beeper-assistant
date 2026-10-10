@@ -78,7 +78,7 @@ test('who reads one person from the corpus: chats with references, stats, and su
   assert.match(r.stdout, /^c[0-9a-f]+ {2}iMessage · 5 messages · last/m, 'the iMessage chat has a Beeper reference');
   assert.match(r.stdout, /^c[0-9a-f]+ {2}WhatsApp · 1 message · last/m);
   assert.match(r.stdout, /4 from them, 2 from you, 3 from them in groups/);
-  assert.match(r.stdout, /you started 25%\. Your reply time: median 12m \(10 answered, 2 not within 48h\)\. Theirs: 25m/);
+  assert.match(r.stdout, /Conversations: 4, you started 1, they started 3\. Your reply time: median 12m \(10 answered, 2 not within 48h\)\. Theirs: 25m/);
   assert.match(r.stdout, /Ball in the Owner's court: 1 chat/);
   assert.match(r.stdout, /Maybe the same person: Sam Okafor \(p_bb22\)\. Not joined, so the stats above leave them out\./);
   assert.doesNotMatch(r.stdout, /Ask the Owner/, 'a hint, never a question');

@@ -309,8 +309,9 @@ export function renderWho(p, { now = Date.now(), builtAt = null, chatRef = (id) 
     const lastWho = s.last_from_owner ? 'you' : 'them';
     out.push(`Messages: ${s.from_them} from them, ${s.from_owner} from you, ${s.group_from_them} from them in groups.${s.first_at ? ` First ${day(s.first_at)}, last ${ago(now - s.last_at)}, from ${lastWho}.` : ''}`);
     if (s.conversations) {
-      const ratio = s.initiation_ratio == null ? '-' : `${Math.round(s.initiation_ratio * 100)}%`;
-      out.push(`Conversations: ${s.conversations}, you started ${ratio}. Your reply time: median ${span(s.owner_reply_first_median_s)} (${s.owner_replied} answered, ${s.owner_unanswered} not within 48h). Theirs: ${span(s.their_reply_first_median_s)}.`);
+      // A Conversation that opens by answering the other side is started by nobody, so the two
+      // counts can add up to fewer than the Conversations.
+      out.push(`Conversations: ${s.conversations}, you started ${s.owner_started ?? 0}, they started ${s.them_started ?? 0}. Your reply time: median ${span(s.owner_reply_first_median_s)} (${s.owner_replied} answered, ${s.owner_unanswered} not within 48h). Theirs: ${span(s.their_reply_first_median_s)}.`);
     }
     out.push(`Groups: ${s.groups_listed} together, ${s.groups_active} where they wrote in the last year.`);
     if (s.ball_in_court_chats) out.push(`Ball in the Owner's court: ${plural(s.ball_in_court_chats, 'chat')}, since ${ago(now - s.ball_in_court_since)}. That is who spoke last, not whether a reply is owed.`);
