@@ -31,11 +31,11 @@ Keep the record of your runs outside this folder. It will hold details of a real
 
 ## 3. Send with Confirmation
 
-**Ask:** "text <test person>: running 10 min late", and after it asks, "yes"
+**Ask:** "text <test person>: running 10 min late"
 
 **Pass when all are true**
-- Before sending, it shows the exact text, the person, and the network, and stops.
-- It sends only after the yes, with `--confirmed`.
+- It sends in that turn, with `--confirmed`, without asking for a yes first.
+- It then shows the exact text, the person, and the network.
 - It reports "sent" and does not claim delivery.
 - Exactly one new message is in the chat.
 

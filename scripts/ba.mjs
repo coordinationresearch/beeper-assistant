@@ -57,7 +57,7 @@ function textFrom(flags) {
 
 function needConfirmed(flags, what) {
   if (flags.confirmed) return;
-  throw new UsageError(`Not done. ${what} needs the Owner's Confirmation. Show them the exact text and the chat name, get a yes, then run again with --confirmed.`);
+  throw new UsageError(`Not done. ${what} needs the Owner's Confirmation. That is their own words telling you to do it, or their yes after you showed them the exact text and the chat name. Then run again with --confirmed.`);
 }
 
 const isTombstone = (text) => /\bunsent a message\b|\bmessage (was )?deleted\b|^\{\{sender\}\}/i.test(String(text || ''));

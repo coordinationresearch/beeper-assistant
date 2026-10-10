@@ -72,7 +72,7 @@ It needs git, Homebrew, and Node 18 or newer. The installer's check names anythi
 | "what was the address Sam sent me?" | Searches your messages for the words and shows the matches |
 | "what's in the photo Sam sent?" | Opens the photo or file so your agent can look at it |
 | "draft a reply to Sam" | Reads the chat and saves a draft in Beeper's compose box |
-| "send it" | Shows you the exact text and chat, waits for your yes, then sends once |
+| "text Sam I'm running late" | Sends it once, then tells you the exact text and chat |
 | "who is this number?" | Reads the chat, offers a guess, and adds a contact when you agree |
 | "mark the ones that need nothing as read" | Clears them |
 
@@ -90,14 +90,14 @@ It can also react, edit, unsend, set reminders, and start groups.
 
 ## What it changes
 
-| Without asking | Only after your yes |
+| Without asking | Only when you say so |
 |---|---|
 | Saves drafts | Sends a message |
 | Marks a chat read | Reacts, edits, or unsends |
 | Sets a reminder | Starts a chat or a group |
 | | Adds a contact |
 
-One yes covers one message to one chat. It never archives.
+Telling your agent to send something is your go-ahead, even when it writes the words. Anything it offers on its own, it shows you first and waits for your yes. One go-ahead covers one message to one chat. It never archives.
 
 You can narrow this further. Set one of these before starting your agent, or write the word into `~/.config/beeper-assistant/mode`:
 
@@ -120,7 +120,7 @@ Drafts show up in Beeper on your other devices, on every app except iMessage. iM
 
 - **Mac only.** Names and contacts depend on the Mac's Contacts.
 - **It knows a question from a "thanks". It does not know who matters to you.** On a busy account, expect some rows that need nothing.
-- **Your yes is a rule the agent follows, not a lock.** The skill tells the agent to get your yes before sending. The two modes above block sending in code. Neither would stop an agent that has been tricked and has full access to your Mac, so use an agent you trust.
+- **Your yes is a rule the agent follows, not a lock.** The skill tells the agent to send only when you said to, and to get your yes before sending anything it suggested on its own. The two modes above block sending in code. Neither would stop an agent that has been tricked and has full access to your Mac, so use an agent you trust.
 - **It is new.** It has been tested on a small number of Macs. Beeper has quirks, and `references/traps.md` lists the ones found so far.
 
 ## Update or remove
