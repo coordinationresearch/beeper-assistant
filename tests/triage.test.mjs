@@ -541,3 +541,109 @@ test('the Reaction must name their newest Message, a photo included', () => {
 test("a filled-in name with lowercase particles is still a tapback's", () => {
   for (const text of ['Anne de Vries loved "Dinner?"', 'Ludwig van Beethoven liked “ok”']) assert.equal(looksLikeReaction(text), true, text);
 });
+
+// ADR 0081: a Chat that holds a Dropped item stays on the list as Waiting, whoever spoke last
+// and however old. Made-up Chats and messages.
+test('a Chat that holds a Dropped item stays on the list whoever spoke last, and one outside the window is fetched', async () => {
+  const day = 86_400_000, iso = (d) => new Date(NOW - d * day).toISOString();
+  const page = (from, text, d) => [said(`m-${text}`, from, text, d * 24)];
+  // Ann: the Owner wrote last, 5 days ago, inside the window. Old: 30 days back, outside it, and
+  // missing from the window's list. Cal: held, but archived. Dee: held and Dismissed.
+  const ann = chat({ id: '!ann', title: 'Ann', lastFrom: 'me', text: 'did you ever hear back about the lease?', hoursAgo: 5 * 24 });
+  const old = chat({ id: '!old', title: 'Old Friend', lastFrom: 'me', text: 'should we book the cabin?', hoursAgo: 30 * 24 });
+  const cal = chat({ id: '!cal', title: 'Cal', lastFrom: 'me', archived: true, hoursAgo: 4 * 24 });
+  const dee = chat({ id: '!dee', title: 'Dee', lastFrom: 'them', text: 'thanks!', hoursAgo: 3 * 24, previewID: '$dee-last' });
+  const state = dismiss({ dismissed: {}, aliases: {} }, dee);
+  const held = new Map([
+    ['!ann', { kind: 'followup', why: 'You asked about the lease and never heard back', at: iso(5) }],
+    ['!old', { kind: 'plan', why: '', at: iso(30) }],
+    ['!cal', { kind: 'followup', why: 'x', at: iso(4) }],
+    ['!dee', { kind: 'promise', why: 'x', at: iso(3) }],
+  ]);
+  const fetched = [];
+  const { preview, ...bare } = old;
+  const reads = { chatsSince: async () => ({ chats: [ann, cal, dee], truncated: false }), contacts: async () => contacts, state: () => state,
+    chat: async (id) => { fetched.push(id); return id === '!old' ? structuredClone(bare) : null; },
+    messages: async (id) => id === '!ann' ? page('me', 'did you ever hear back about the lease?', 5) : id === '!old' ? page('me', 'should we book the cabin?', 30) : page('them', 'thanks!', 3),
+    dropped: async () => held };
+  const t = await collectTriage(reads, { now: NOW });
+  assert.deepEqual(fetched, ['!old'], 'only the held Chat the list lacks');
+  const rows = Object.fromEntries(t.people.map((r) => [r.name, r]));
+  assert.deepEqual(Object.keys(rows).sort(), ['Ann', 'Old Friend'], 'archived and Dismissed stay out');
+  for (const name of ['Ann', 'Old Friend']) {
+    assert.equal(rows[name].lastFrom, 'me');
+    assert.equal(rows[name].rank.class, 'waiting');
+    assert.deepEqual(rows[name].rank.held, { leads: true });
+  }
+  assert.match(rows.Ann.rank.reason, /^You asked about the lease and never heard back · .* · 5d ago$/);
+  assert.match(rows['Old Friend'].rank.reason, /^A plan that went quiet/);
+  assert.ok(!('held' in JSON.parse(JSON.stringify(rows.Ann))), 'the Dropped item stays out of JSON');
+  assert.equal(t.stats.held, 2);
+});
+
+test('nothing demotes a held row: a Judgment of nothing owed, or a low answer rate', async () => {
+  const ann = chat({ id: '!ann', title: 'Ann', lastFrom: 'them', text: 'haha ok', hoursAgo: 2 });
+  const ben = chat({ id: '!ben', title: 'Ben', lastFrom: 'them', text: 'are you around saturday?', hoursAgo: 2 });
+  const held = new Map([['!ann', { kind: 'promise', why: 'You promised the photos', at: new Date(NOW - 9 * 86_400_000).toISOString() }],
+    ['!ben', { kind: 'promise', why: 'You promised the deck', at: new Date(NOW - 9 * 86_400_000).toISOString() }]]);
+  const stats = new Map(['!ann', '!ben'].map((id) => [id, { owner: 40, theirs: 40, owner90: 2, ownerWeeks26: 1, messages: 80, runs: 20, answered: 1 }]));
+  const reads = { chatsSince: async () => ({ chats: [ann, ben], truncated: false }), contacts: async () => contacts, state: () => null,
+    messages: async (id) => [said(`m-${id}`, 'them', id === '!ann' ? 'haha ok' : 'are you around saturday?', 2)],
+    history: async () => ({ stats, problems: [] }), dropped: () => held };
+  const judge = async () => new Map([['!ann', { owed: 'no', want: 'pleasantry', urgent: false }], ['!ben', { owed: 'yes', want: 'plan', urgent: false }]]);
+  const t = await collectTriage(reads, { now: NOW, judge });
+  const rows = Object.fromEntries(t.people.map((r) => [r.name, r]));
+  assert.equal(rows.Ann.rank.class, 'waiting');
+  assert.equal(rows.Ann.rank.cause, 'dropped-item');
+  assert.deepEqual(rows.Ann.rank.held, { leads: true });
+  // Ben's Judgment says owed, but his low answer rate would make him unsure: the loop lifts him, so it leads.
+  assert.equal(rows.Ben.rank.class, 'waiting');
+  assert.deepEqual(rows.Ben.rank.held, { leads: true });
+  assert.match(rows.Ben.rank.reason, /^You promised the deck/);
+});
+
+test('a held row owed on its own keeps its own Reason, and the loop does not lead', async () => {
+  const cy = chat({ id: '!cy', title: 'Cy', lastFrom: 'them', text: 'are you around saturday?', hoursAgo: 2 });
+  const held = new Map([['!cy', { kind: 'promise', why: 'You promised the deck', at: new Date(NOW - 9 * 86_400_000).toISOString() }]]);
+  const reads = { chatsSince: async () => ({ chats: [cy], truncated: false }), contacts: async () => contacts, state: () => null,
+    messages: async () => [said('m-cy', 'them', 'are you around saturday?', 2)], dropped: () => held,
+    history: async () => ({ stats: new Map([['!cy', { owner: 40, theirs: 40, owner90: 25, ownerWeeks26: 8, messages: 80, runs: 20, answered: 15 }]]), problems: [] }) };
+  const t = await collectTriage(reads, { now: NOW, judge: async () => new Map([['!cy', { owed: 'yes', want: 'plan', urgent: false }]]) });
+  assert.equal(t.people[0].rank.class, 'waiting');
+  assert.deepEqual(t.people[0].rank.held, { leads: false });
+  assert.doesNotMatch(t.people[0].rank.reason, /deck/);
+});
+
+test('an empty dropped() leaves the list exactly as no dropped() does', async () => {
+  const make = () => [chat({ id: '!a', title: 'Ann', lastFrom: 'me', hoursAgo: 5 * 24 }), chat({ id: '!b', title: 'Ben', lastFrom: 'them', hoursAgo: 2 }),
+    chat({ id: '!c', title: 'Cal', unread: 2, lastFrom: 'them', text: 'thanks!', hoursAgo: 30 })];
+  const fixed = make();
+  const reads = (extra) => ({ chatsSince: async () => ({ chats: structuredClone(fixed), truncated: false }), contacts: async () => contacts, state: () => null,
+    messages: async (id) => [said(`m-${id}`, id === '!a' ? 'me' : 'them', 'are you free friday?', id === '!a' ? 120 : 2)], ...extra });
+  const plain = await collectTriage(reads({}), { now: NOW });
+  const empty = await collectTriage(reads({ dropped: () => new Map(), chat: async () => { throw new Error('never asked'); } }), { now: NOW });
+  assert.equal(JSON.stringify(empty), JSON.stringify(plain));
+});
+
+test('without dropped(), collectTriage reads and returns exactly what it did before', async () => {
+  const chats = [chat({ id: '!a', title: 'Ann', lastFrom: 'me', hoursAgo: 5 * 24 }), chat({ id: '!b', title: 'Ben', lastFrom: 'them', hoursAgo: 2 })];
+  const reads = { chatsSince: async () => ({ chats: structuredClone(chats), truncated: false }), contacts: async () => contacts, state: () => null,
+    messages: async (id) => [said(`m-${id}`, id === '!a' ? 'me' : 'them', 'are you free friday?', id === '!a' ? 120 : 2)] };
+  const t = await collectTriage(reads, { now: NOW });
+  assert.deepEqual(t.people.map((r) => r.name), ['Ben']);
+  assert.ok(!('held' in t.stats));
+  assert.equal(t.people[0].rank.held, undefined);
+});
+
+test('a held row only its Dropped item let past the window is led by it, even with a question of theirs', async () => {
+  const old = chat({ id: '!old', title: 'Old Pal', lastFrom: 'them', text: 'are you around next month?', hoursAgo: 30 * 24 });
+  const held = new Map([['!old', { kind: 'unanswered', why: 'They asked about next month and never heard back', at: new Date(NOW - 30 * 86_400_000).toISOString() }]]);
+  const reads = { chatsSince: async () => ({ chats: [], truncated: false }), contacts: async () => contacts, state: () => null,
+    chat: async () => { const { preview, ...bare } = structuredClone(old); return bare; },
+    messages: async () => [said('m-old', 'them', 'are you around next month?', 30 * 24)], dropped: () => held,
+    history: async () => ({ stats: new Map([['!old', { owner: 40, theirs: 40, owner90: 25, ownerWeeks26: 8, messages: 80, runs: 20, answered: 15 }]]), problems: [] }) };
+  const t = await collectTriage(reads, { now: NOW, judge: async () => new Map([['!old', { owed: 'yes', want: 'plan', urgent: false }]]) });
+  assert.equal(t.people[0].rank.class, 'waiting');
+  assert.deepEqual(t.people[0].rank.held, { leads: true }, 'without its item the window would have left it out');
+  assert.match(t.people[0].rank.reason, /^They asked about next month/);
+});

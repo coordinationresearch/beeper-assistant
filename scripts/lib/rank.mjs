@@ -106,8 +106,9 @@ function baseClass(r) {
 // - urgent-lapsed: the urgent verdict passed its expiry.
 // - low-answer-rate: waiting moved to unsure because the Owner seldom answers this Chat.
 // - rules: the verdict's owed was not one the rank knows, so the rules ranked it.
+// - dropped-item: the Chat holds a Dropped item, which keeps it waiting (ADR 0081).
 // One cause per row: the last rule that moved the class wins.
-export const CAUSES = ['owner-wrote-last', 'marked-unread', 'closeness', 'urgent-lapsed', 'low-answer-rate', 'rules'];
+export const CAUSES = ['owner-wrote-last', 'marked-unread', 'closeness', 'urgent-lapsed', 'low-answer-rate', 'rules', 'dropped-item'];
 
 // A model's verdict, when the companion has one, outranks the rules on what is owed. It
 // cannot make a stranger urgent, and an urgent verdict lapses at its expiry. A Chat the Owner
@@ -172,8 +173,15 @@ export function rankRow(r, { now = Date.now(), stats = null, stranger = null, ju
   if (r.hasDraft) add('draft', -3);
   // Someone the Owner seldom answers drops out of waiting. Never out of urgent.
   if (cls === 'waiting' && share !== null && share < 0.2 && stats.runs >= 5 && !markedByOwner(r)) { cls = 'unsure'; cause = 'low-answer-rate'; }
+  // Then a Chat that holds a Dropped item is at least waiting, whoever spoke last and whatever the
+  // verdict, Closeness, or answer rate said (ADR 0081). leads: the Dropped item is what placed
+  // it, so the row speaks of the loop and Agent Drafts leave it alone.
+  // A row on the list only past a rule that would have left it out is led by its item too.
+  const leads = Boolean(r.held) && (Boolean(r.heldOnly) || (cls !== 'urgent' && cls !== 'waiting'));
+  if (leads) { if (cls !== 'urgent') { cls = 'waiting'; cause = 'dropped-item'; } add('dropped', WANT_POINTS.ask); }
   const score = Math.max(0, Math.min(100, factors.reduce((s, f) => s + f.points, 0)));
   r.rank = { class: cls, score, closeness: r.closeness, want: r.want, factors, judged: !!judgment };
+  if (r.held) r.rank.held = { leads };
   if (judgment) r.rank.cause = cause;
   if (judgment && judgment.gist) r.rank.gist = String(judgment.gist).replace(/\s+/g, ' ').trim().slice(0, 90);
   if (cls === 'urgent' && judgment && judgment.urgentKind) r.rank.urgentKind = judgment.urgentKind;
@@ -242,10 +250,25 @@ export function waitWords(r, now = Date.now()) {
   return `waiting ${Math.floor(h / 24)}d`;
 }
 
+// What a Dropped item is, when the caller gave no line of its own.
+const DROPPED_WORDS = { promise: 'A promise you made', unanswered: 'A message you never answered', plan: 'A plan that went quiet', followup: 'Your question they never answered' };
+// How long ago, in whole days or hours: "12d ago".
+export function agoWords(at, now = Date.now()) {
+  const ms = Math.max(0, now - (Date.parse(at) || now));
+  const h = Math.floor(ms / HOUR);
+  return h < 48 ? `${Math.max(1, h)}h ago` : `${Math.floor(h / 24)}d ago`;
+}
+
 // One line a person would agree explains the place: what they want, then why it sits here.
 // The part that moved the row, such as the Owner's answer rate, is never the part dropped.
+// A row its Dropped item placed names the loop and when it was said instead.
 export function reasonFor(r, { stats = null, stranger = null, now = Date.now() } = {}) {
   const k = r.rank;
+  if (k.held && k.held.leads && r.held) {
+    const lead = String(r.held.why || '').replace(/\s+/g, ' ').trim().replace(/[.;,:]+$/, '') || DROPPED_WORDS[r.held.kind] || 'Something you dropped';
+    const who = closenessWords(r, stats, now).replace(/, (most weeks|often lately)$/, '');
+    return [lead, who, agoWords(r.held.at, now)].filter(Boolean).join(' · ');
+  }
   const soon = k.factors.some((f) => f.name === 'soon');
   let lead = k.gist || (k.class === 'urgent' ? URGENT_WORDS[k.urgentKind] || 'Time-sensitive' : soon ? 'Making plans for the next few days' : WANT_WORDS[k.want] || 'New message');
   if (r.type === 'group' && r.mentions && !k.gist) lead = `Mentioned you${r.mentions > 1 ? ` ${r.mentions} times` : ''}`;

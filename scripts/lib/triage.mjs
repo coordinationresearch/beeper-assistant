@@ -345,12 +345,19 @@ export function applyContext(row, messages, { now = Date.now(), shown = 4 } = {}
 }
 
 // Drops rows that left the list since they were read: outside the window, answered, or
-// ending in nothing owed. Counts what it drops.
+// ending in nothing owed. Counts what it drops. A row that holds a Dropped item stays,
+// whoever spoke last and however old its last message (ADR 0081).
 export function filterTriage(t) {
   const s = t.stats;
   const keep = [];
   const windowMs = (t.windowDays || DEFAULT_WINDOW_DAYS) * DAY;
   for (const r of t.people) {
+    // A held row stays. One the rules below would drop is there only for its Dropped item.
+    if (r.held) {
+      if (r.ageMs > windowMs || (r.state === 'read' && (r.lastFrom === 'me' || NOTHING_OWED.has(r.kind)))) r.heldOnly = true;
+      keep.push(r);
+      continue;
+    }
     if (r.ageMs > windowMs) { if (r.state === 'unread') s.olderUnread++; else s.stale++; continue; }
     if (r.state === 'read' && r.lastFrom === 'me') { s.waitingOnThem++; continue; }
     if (r.state === 'read' && NOTHING_OWED.has(r.kind)) { s.nothingOwed++; continue; }
@@ -382,29 +389,46 @@ export function finalizeTriage(t, opts = {}) {
   return capTriage(sortByState(filterTriage(t)), opts);
 }
 
-export function buildTriage(chats, { now = Date.now(), windowDays = DEFAULT_WINDOW_DAYS, state = null, contacts = null, maxPeople = 100, maxGroups = 10, includeAutomated = false, finalize = true } = {}) {
+// held: Chats the caller says hold a Dropped item (ADR 0081), as a Map from Chat id to
+// { kind, why, at }. Such a Chat stays whoever spoke last and however long ago, and the row
+// carries it as `held`, kept out of JSON. What the Owner said about the Chat still counts:
+// archived, muted, low priority, or Dismissed leaves it out. `ba triage` passes none.
+export function buildTriage(chats, { now = Date.now(), windowDays = DEFAULT_WINDOW_DAYS, state = null, contacts = null, maxPeople = 100, maxGroups = 10, includeAutomated = false, finalize = true, held = null } = {}) {
   const cutoff = now - windowDays * DAY;
   const stats = { scanned: chats.length, filtered: 0, olderUnread: 0, bots: 0, readOnly: 0, self: 0, automated: 0, dismissed: 0, waitingOnThem: 0, nothingOwed: 0, stale: 0, quietGroups: 0, morePeople: 0, moreGroups: 0, unresolvedNames: 0 };
+  if (held && held.size) stats.held = 0;
   const self = selfHandles(chats);
   const names = selfNames(chats);
   const people = [];
   const groups = [];
+  // heldOnly: the Chat is on the list only for its Dropped item, past a rule that would have
+  // left it out. filterTriage may set it too, once the Chat's messages are read.
+  const hold = (row, h, only) => {
+    Object.defineProperty(row, 'held', { value: h, enumerable: false, writable: true, configurable: true });
+    Object.defineProperty(row, 'heldOnly', { value: only, enumerable: false, writable: true, configurable: true });
+    stats.held++;
+    return row;
+  };
   for (const c of chats) {
     if (c.isArchived || c.isMuted || c.isLowPriority) { stats.filtered++; continue; }
     const unread = isUnread(c);
-    if ((Date.parse(c.lastActivity) || 0) < cutoff) { if (unread) stats.olderUnread++; continue; }
+    const h = held ? held.get(c.id) : undefined;
+    const old = (Date.parse(c.lastActivity) || 0) < cutoff;
+    if (!h && old) { if (unread) stats.olderUnread++; continue; }
     if (isBotChat(c)) { stats.bots++; continue; }
     if (c.isReadOnly) { stats.readOnly++; continue; }
     if (isGroup(c)) {
-      if (unread) groups.push(toRow(c, { now, contacts })); else stats.quietGroups++;
+      if (unread || h) groups.push(h ? hold(toRow(c, { now, contacts }), h, old || !unread) : toRow(c, { now, contacts })); else stats.quietGroups++;
       continue;
     }
     if (isSelfChat(c, self, names)) { stats.self++; continue; }
-    if (!unread && !lastIsTheirs(c) && !ownerReactedLast(c)) { stats.waitingOnThem++; continue; }
+    const theirs = unread || lastIsTheirs(c) || ownerReactedLast(c);
+    if (!h && !theirs) { stats.waitingOnThem++; continue; }
     const row = toRow(c, { now, contacts });
-    if (!includeAutomated && (isAutomated(c) || (!row.nameResolved && looksAutomatedText(c.preview && c.preview.text)))) { stats.automated++; continue; }
+    // A model checked a held Chat's item, about someone the Owner has talked with: no guess about machines applies.
+    if (!h && !includeAutomated && (isAutomated(c) || (!row.nameResolved && looksAutomatedText(c.preview && c.preview.text)))) { stats.automated++; continue; }
     if (state && isDismissed(state, c)) { stats.dismissed++; continue; }
-    people.push(row);
+    people.push(h ? hold(row, h, old || !theirs) : row);
   }
   const t = { windowDays, generatedAt: new Date(now).toISOString(), people, groups, stats };
   return finalize ? finalizeTriage(t, { maxPeople, maxGroups }) : t;
