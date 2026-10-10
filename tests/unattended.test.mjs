@@ -184,3 +184,13 @@ test('the unattended entry point is locked to drafts-only, whatever the environm
   assert.match(go({}, 'note', 'c00000000', '--text', 'x').stderr, /brew install/);
   assert.match(go({ BEEPER_ASSISTANT_MODE: 'full' }, 'note', 'c00000000', '--delete', 'n00000000').stderr, /Drafts-only mode is on, so the Note was not deleted/);
 });
+
+test("a Chat whose newest Message the Owner answered with a Reaction is not Pending", () => {
+  const reacted = friend('Ann', 1);
+  reacted.messages = [...reacted.messages, { id: '$r', isSender: true, type: 'REACTION', isHidden: true, linkedMessageID: reacted.messages[1].id, text: '', timestamp: at(0.5) }];
+  const earlier = friend('Ben', 1);
+  earlier.messages = [msg('me', 'hey', 6), msg('them', 'first', 1.5), msg('them', 'second?', 1), { id: '$r2', isSender: true, type: 'REACTION', isHidden: true, linkedMessageID: '$them-first-1.5', text: '', timestamp: at(0.5) }];
+  const p = selectPending(rows([{ ...reacted, unread: 1 }, earlier]), { state: emptyState() });
+  assert.deepEqual(p.batch.map((r) => r.name), ['Ben'], 'a Reaction to an earlier Message leaves Ben owed');
+  assert.equal(p.counts.ownerSpokeLast, 1);
+});

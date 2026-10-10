@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { buildIndex } from '../scripts/lib/contacts.mjs';
 import { dismiss, isDismissed } from '../scripts/lib/state.mjs';
 import { looksLikeAck } from '../scripts/lib/triage.mjs';
-import { applyContext, buildTriage, chatName, draftKind, draftText, finalizeTriage, handlesOf, htmlToText, isAutomated, isSelfChat, looksAutomatedText, looksLikeReaction, previewKind, previewText, selfHandles, selfNames, senderLabel, tidyLinks, trailingInbound, wantsContext } from '../scripts/lib/triage.mjs';
+import { applyContext, buildTriage, chatName, draftKind, draftText, finalizeTriage, handlesOf, htmlToText, isAutomated, isSelfChat, looksAutomatedText, looksLikeReaction, previewKind, previewText, reactionOf, selfHandles, selfNames, senderLabel, tidyLinks, trailingInbound, wantsContext } from '../scripts/lib/triage.mjs';
 import { ME } from './fixtures.mjs';
 import { collectTriage } from '../scripts/lib/triage-run.mjs';
 import { CONTACT_ROWS, NOW, chat, person } from './fixtures.mjs';
@@ -427,4 +427,117 @@ test('a group whose preview is not their message reads back for their newest one
   assert.equal(club.kind, 'reaction', 'the preview still ranks it');
   assert.equal(team.lastInboundAt, at(3), 'a real message in the preview needs no read');
   assert.deepEqual(read, ['!club']);
+});
+
+// The Owner's Reaction answers their newest Message (ADR 0085). Beeper gives a bridged network's
+// Reaction as a hidden REACTION item naming its Message, an iMessage tapback as text naming it,
+// and lists every Reaction on the Message it reacts to.
+const at = (h) => new Date(NOW - h * 3_600_000).toISOString();
+const said = (id, from, text, h, extra = {}) => ({ id, isSender: from === 'me', senderID: from === 'me' ? '@owner:test' : '@ann:test', senderName: from === 'me' ? 'Owner' : 'Ann', text, timestamp: at(h), ...extra });
+const hearted = (id, to, from, h, extra = {}) => said(id, from, '', h, { type: 'REACTION', isHidden: true, linkedMessageID: to, ...extra });
+const burstOfThree = [said('o1', 'me', 'how was the trip?', 5), said('t1', 'them', 'amazing', 3), said('t2', 'them', 'got you something', 2.9), said('t3', 'them', 'when can I drop it off?', 2.8)];
+
+test("the Owner's Reaction to their newest Message answers it: not their court, off the list, not Pending", () => {
+  const forms = {
+    'a REACTION item': [...burstOfThree, hearted('r1', 't3', 'me', 2)],
+    'an iMessage tapback': [...burstOfThree, said('r1', 'me', '{{sender}} loved “when can I drop it off?”', 2, { linkedMessageID: 't3' })],
+    'the Message listing it': [...burstOfThree.slice(0, 3), { ...burstOfThree[3], reactions: [{ id: 'x', participantID: '@owner:test', reactionKey: '❤️' }] }],
+  };
+  for (const [form, messages] of Object.entries(forms)) {
+    const r = trailingInbound(messages);
+    assert.deepEqual([r.lastFrom, r.reacted, r.burst.map((m) => m.id)], ['me', true, ['t1', 't2', 't3']], form);
+    const t = build([chat({ title: 'Ann', lastFrom: 'them', text: 'when can I drop it off?', hoursAgo: 2 })], { finalize: false });
+    applyContext(t.people[0], messages, { now: NOW });
+    assert.deepEqual([t.people[0].lastFrom, t.people[0].ownerReacted, t.people[0].newestID], ['me', true, undefined], form);
+    finalizeTriage(t);
+    assert.equal(t.people.length, 0, form);
+    assert.equal(t.stats.waitingOnThem, 1, form);
+  }
+  // Still Unread keeps it listed, as it does after a reply in words.
+  const unread = build([chat({ title: 'Ann', lastFrom: 'me', unread: 1, hoursAgo: 2 })], { finalize: false });
+  applyContext(unread.people[0], forms['a REACTION item'], { now: NOW });
+  assert.equal(finalizeTriage(unread).people.length, 1);
+});
+
+test('a Reaction the Owner took back, or one from them, answers nothing', () => {
+  const removed = trailingInbound([...burstOfThree, hearted('r1', 't3', 'me', 2, { isDeleted: true })]);
+  assert.deepEqual([removed.lastFrom, removed.reacted, removed.burst.map((m) => m.id)], ['them', false, ['t1', 't2', 't3']]);
+  const theirs = trailingInbound([...burstOfThree, hearted('r1', 't3', 'them', 2), { ...burstOfThree[3], id: 't4', reactions: [{ participantID: '@ann:test', reactionKey: '❤️' }] }]);
+  assert.equal(theirs.lastFrom, 'them');
+  assert.equal(theirs.reacted, false);
+});
+
+test("the Owner's Reaction to an earlier Message of their Burst leaves it owed", () => {
+  for (const messages of [[...burstOfThree, hearted('r1', 't1', 'me', 2)], [...burstOfThree, said('r1', 'me', 'Loved “amazing”', 2, { linkedMessageID: 't1' })]]) {
+    const r = trailingInbound(messages);
+    assert.deepEqual([r.lastFrom, r.reacted, r.burst.map((m) => m.id)], ['them', false, ['t1', 't2', 't3']]);
+    const t = build([chat({ title: 'Ann', lastFrom: 'them', text: 'when can I drop it off?', hoursAgo: 2.8 })], { finalize: false });
+    applyContext(t.people[0], messages, { now: NOW });
+    assert.equal(t.people[0].newestID, 't3');
+    assert.equal(finalizeTriage(t).people.length, 1);
+  }
+});
+
+test("their Reaction to the Owner's Message never puts the ball in the Owner's court", () => {
+  const messages = [said('t1', 'them', 'dinner friday?', 4), said('o1', 'me', 'yes! 7?', 3), hearted('r1', 'o1', 'them', 2), said('r2', 'them', '{{sender}} loved “yes! 7?”', 1.9, { linkedMessageID: 'o1' })];
+  const r = trailingInbound(messages);
+  assert.deepEqual([r.lastFrom, r.reacted], ['me', false]);
+  const t = build([chat({ title: 'Ann', lastFrom: 'them', text: '', hoursAgo: 1.9 })], { finalize: false });
+  applyContext(t.people[0], messages, { now: NOW });
+  assert.equal(t.people[0].ownerReacted, undefined);
+  assert.equal(finalizeTriage(t).people.length, 0);
+});
+
+test('a tapback an SMS phone sends as text is a Reaction, not a Message', () => {
+  for (const text of ['{{sender}} emphasized "Dinner ????"', '+1 555-201-0100 emphasized "Dinner ????"', '+1 (555) 201-0100 loved “Dinner ????”', 'Ann Smith laughed at "see you there"', 'Emphasized "Dinner ????"']) {
+    assert.equal(looksLikeReaction(text), true, text);
+    assert.deepEqual(reactionOf(said('s1', 'them', text, 1)), { fromOwner: false, to: null }, text);
+  }
+  // Someone's own sentence that only mentions a verb stays a Message.
+  for (const text of ['we all loved "the bear" so much', 'i really loved "Dune"', '+1 555-201-0100 is my new number', 'Ann Smith loved the show']) assert.equal(looksLikeReaction(text), false, text);
+  const r = trailingInbound([said('o1', 'me', 'Dinner is on!', 3), said('s1', 'them', '+1 555-201-0100 emphasized "Dinner is on!"', 2)]);
+  assert.deepEqual([r.lastFrom, r.burst.length], ['me', 0]);
+  const owed = trailingInbound([said('o1', 'me', 'Dinner is on!', 3), said('t1', 'them', 'who else?', 2.5), said('s1', 'them', '{{sender}} emphasized "who else?"', 2)]);
+  assert.deepEqual(owed.burst.map((m) => m.id), ['t1']);
+});
+
+test('a Burst ends at 8 quiet hours: the newer one is what is owed', () => {
+  const night = [said('o1', 'me', 'night!', 12), said('t1', 'them', 'you up?', 10), said('t2', 'them', 'call me about the lease', 2)];
+  const r = trailingInbound(night);
+  assert.deepEqual([r.lastFrom, r.burst.map((m) => m.id), r.more], ['them', ['t2'], false]);
+  const t = build([chat({ title: 'Ann', lastFrom: 'them', text: 'call me about the lease', hoursAgo: 2 })], { finalize: false });
+  applyContext(t.people[0], night, { now: NOW });
+  assert.deepEqual([t.people[0].runIDs, t.people[0].waitingSince], [['t2'], at(2)]);
+  // Under 8 hours it is one Burst, and so is a run with no Owner's message on the page.
+  assert.deepEqual(trailingInbound([said('t1', 'them', 'you up?', 9.9), said('t2', 'them', 'call me about the lease', 2)]).burst.map((m) => m.id), ['t1', 't2']);
+  assert.equal(trailingInbound([said('t1', 'them', 'you up?', 9.9), said('t2', 'them', 'call me about the lease', 2)]).more, true);
+  // A Reaction or a notice between them is not a Message, so it doesn't break the silence.
+  assert.deepEqual(trailingInbound([said('t1', 'them', 'you up?', 10), hearted('r1', 't1', 'me', 6), said('t2', 'them', 'call me', 2)]).burst.map((m) => m.id), ['t2']);
+  // Their newest Message answered with a Reaction after the gap: nothing owed, whatever came before.
+  const answered = trailingInbound([...night, hearted('r1', 't2', 'me', 1)]);
+  assert.deepEqual([answered.lastFrom, answered.reacted], ['me', true]);
+});
+
+test("a read Chat whose latest item is the Owner's Reaction is read, so one on an earlier Message keeps it owed", async () => {
+  const chats = [chat({ id: '!early', title: 'Ann', lastFrom: 'me', text: '{{sender}} loved “amazing”', hoursAgo: 2 }),
+    chat({ id: '!newest', title: 'Ben', lastFrom: 'me', text: '{{sender}} loved “when can I drop it off?”', hoursAgo: 2 })];
+  const pages = { '!early': [...burstOfThree, said('r1', 'me', '{{sender}} loved “amazing”', 2, { linkedMessageID: 't1' })],
+    '!newest': [...burstOfThree, said('r1', 'me', '{{sender}} loved “when can I drop it off?”', 2, { linkedMessageID: 't3' })] };
+  const t = await collectTriage({ chatsSince: async () => ({ chats, truncated: false }), contacts: async () => contacts, state: () => null, messages: async (id) => pages[id] }, { now: NOW });
+  assert.deepEqual(t.people.map((r) => [r.name, r.lastFrom, r.newestID]), [['Ann', 'them', 't3']]);
+  assert.equal(t.stats.waitingOnThem, 1);
+});
+
+test('the Reaction must name their newest Message, a photo included', () => {
+  const photo = said('t4', 'them', '', 2.5, { type: 'IMAGE', attachments: [{ type: 'img' }] });
+  const onText = trailingInbound([...burstOfThree, photo, hearted('r1', 't3', 'me', 2)]);
+  assert.deepEqual([onText.lastFrom, onText.reacted], ['them', false], 'their photo came after the Message the Owner hearted');
+  const onPhoto = trailingInbound([...burstOfThree, photo, hearted('r1', 't4', 'me', 2)]);
+  assert.deepEqual([onPhoto.lastFrom, onPhoto.reacted], ['me', true]);
+  // A notice after their Message is not a Message.
+  assert.equal(trailingInbound([...burstOfThree, said('n1', 'them', 'Ann shared a location', 2.5, { type: 'LOCATION', isHidden: true }), hearted('r1', 't3', 'me', 2)]).reacted, true);
+});
+
+test("a filled-in name with lowercase particles is still a tapback's", () => {
+  for (const text of ['Anne de Vries loved "Dinner?"', 'Ludwig van Beethoven liked “ok”']) assert.equal(looksLikeReaction(text), true, text);
 });

@@ -306,6 +306,11 @@ test('a Chat where the Owner wrote last owes nothing, whatever the unread count 
   rank(rows, { mine: CLOSE }, { judgments: new Map() });
   assert.equal(rows[0].rank.class, 'nothing');
   assert.match(rows[0].rank.reason, /^You wrote last/);
+  const reacted = [row({ id: 'tap', unread: 1 })];
+  Object.assign(reacted[0], { lastFrom: 'me', ownerReacted: true });
+  rank(reacted, { tap: CLOSE }, { judgments: new Map() });
+  assert.equal(reacted[0].rank.class, 'nothing');
+  assert.match(reacted[0].rank.reason, /^You reacted last/);
   const judged = [row({ id: 'mine2', unread: 1 })];
   judged[0].lastFrom = 'me';
   rank(judged, { mine2: CLOSE }, { judgments: new Map([['mine2', { owed: 'yes', want: 'plan', urgent: true }]]) });

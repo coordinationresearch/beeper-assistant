@@ -8,6 +8,9 @@ const DAY = 86_400_000;
 
 export const isUnread = (c) => (c.unreadCount || 0) > 0 || c.isMarkedUnread === true;
 export const lastIsTheirs = (c) => !!c.preview && c.preview.isSender === false;
+// The Owner's Reaction is the latest item. Only reading the Chat tells whether it answered their
+// newest Message or an earlier one.
+const ownerReactedLast = (c) => !!c.preview && c.preview.isSender === true && previewKind(c.preview) === 'reaction';
 export const isGroup = (c) => c.type !== 'single';
 export const counterparties = (c) => participantsOf(c).filter((p) => p.isSelf !== true);
 
@@ -18,7 +21,16 @@ export function isBotChat(c) {
 
 // iMessage tapbacks and similar arrive as plain text.
 const REACTION = /^(?:(?:\{\{\s*sender\s*\}\}|\S+)\s+)?(?:(?:loved|liked|disliked|laughed at|emphasi[sz]ed|questioned)\s+|(?:\S+\s+){0,3}?reacted\s+(?:\S+\s+){0,2}?to\s+)(["'\u201c\u2018]|&quot;|an? (image|attachment|photo|video|audio|sticker|message))/i;
-export const looksLikeReaction = (text) => REACTION.test(String(text || '').trim());
+// The same with a phone number or a whole name in front, as readers write it once {{sender}} is
+// filled in: '+1 555-201-0100 emphasized "see you there"'. A longer lead could be someone's own
+// sentence, so it must be a number or capitalized words, with a name's lowercase particles such
+// as "de" or "van" between them, and the text must end with the quote.
+// No i flag: with it, \p{Lu} matches lowercase too.
+const NAMED_REACTION = /^(?:\+?[\d(][\d\s().-]{5,}\d|\p{Lu}\S*(?:\s+(?:(?:al|bin|da|de|del|della|den|der|di|dos|du|ibn|la|le|st\.?|ter|van|von)\s+)?\p{Lu}\S*){1,3})\s+(?:(?:[Ll]oved|[Ll]iked|[Dd]isliked|[Ll]aughed at|[Ee]mphasi[sz]ed|[Qq]uestioned)\s+|[Rr]eacted\s+(?:\S+\s+){0,2}?to\s+)(?:(?:["'\u201c\u2018]|&quot;)[\s\S]*(?:["'\u201d\u2019]|&quot;)|[Aa]n? (?:image|attachment|photo|video|audio|sticker|message))$/u;
+export const looksLikeReaction = (text) => {
+  const t = String(text || '').trim();
+  return REACTION.test(t) || NAMED_REACTION.test(t);
+};
 
 const handleLike = (s) => looksLikePhone(s) || looksLikeEmail(s);
 
@@ -235,17 +247,50 @@ const NOTHING_OWED = new Set(['reaction', 'notice', 'empty', 'ack']);
 const NOT_A_MESSAGE = new Set(['reaction', 'notice', 'empty']);
 const isReal = (m) => !m.isHidden && !NOT_A_MESSAGE.has(previewKind(m));
 
-// Who really spoke last, and everything they said since the Owner's last message.
-// People send several short texts in a row, and the question is often not the last one.
+// A Conversation ends after 8 quiet hours, and a Burst with it (CONTEXT.md).
+export const CONVERSATION_GAP_MS = 8 * 3_600_000;
+
+// A Reaction, not a Message: Beeper's REACTION items, and tapbacks a network delivers as text.
+// Who sent it, and the id of the Message it reacts to when Beeper names one (linkedMessageID;
+// a tapback an SMS phone sends as text names none). Null for anything else.
+export function reactionOf(m) {
+  if (!m || previewKind(m) !== 'reaction') return null;
+  return { fromOwner: m.isSender === true, to: m.linkedMessageID == null ? null : String(m.linkedMessageID) };
+}
+
+// Whether the Owner's Reaction stands on this Message: a Reaction of the Owner's that names it and
+// was not taken back, or the Owner among the Reactions Beeper lists on it. Beeper names the Owner
+// there by the participant ID the Owner's own items carry.
+function ownerReacted(messages, target) {
+  const id = String(target.id);
+  if (messages.some((m) => { const r = !m.isDeleted && reactionOf(m); return Boolean(r && r.fromOwner && r.to === id); })) return true;
+  const self = new Set(messages.filter((m) => m.isSender === true && m.senderID).map((m) => String(m.senderID)));
+  return Array.isArray(target.reactions) && target.reactions.some((r) => r && (r.isSender === true || self.has(String(r.participantID))));
+}
+
+// A Message as CONTEXT.md has it, for which one a Reaction names: photos, videos, voice notes,
+// files, and stickers count, though the rest of Triage reads only a bridged network's text.
+const MEDIA = new Set(['IMAGE', 'VIDEO', 'VOICE', 'AUDIO', 'FILE', 'STICKER']);
+const isMessage = (m) => !m.isHidden && !m.isDeleted && (isReal(m) || MEDIA.has(String(m.type || '').toUpperCase()));
+
+const quietBetween = (a, b) => Date.parse(b.timestamp) - Date.parse(a.timestamp) >= CONVERSATION_GAP_MS;
+
+// Who really spoke last, and their Burst: everything they said since the Owner's last message,
+// back to 8 quiet hours. People send several short texts in a row, and the question is often
+// not the last one. The Owner's Reaction to their newest Message answers it: the Owner is last,
+// `reacted` says how, and `burst` is the Burst it answered. One on an earlier Message answers nothing.
 export function trailingInbound(messages) {
   const real = messages.filter(isReal);
   const last = real[real.length - 1];
-  if (!last) return { lastFrom: null, burst: [], more: false };
-  if (last.isSender) return { lastFrom: 'me', burst: [], more: false };
-  const burst = [];
-  for (let i = real.length - 1; i >= 0 && !real[i].isSender; i--) burst.unshift(real[i]);
-  // When every message fetched is theirs, the run may reach further back.
-  return { lastFrom: 'them', burst, more: burst.length === real.length };
+  if (!last) return { lastFrom: null, burst: [], more: false, reacted: false };
+  if (last.isSender) return { lastFrom: 'me', burst: [], more: false, reacted: false };
+  const burst = [last];
+  let i = real.length - 2;
+  for (; i >= 0 && !real[i].isSender && !quietBetween(real[i], burst[0]); i--) burst.unshift(real[i]);
+  // When every message fetched is theirs, the Burst may reach further back.
+  const newest = messages.filter(isMessage).at(-1);
+  const reacted = !!newest && !newest.isSender && ownerReacted(messages, newest);
+  return { lastFrom: reacted ? 'me' : 'them', burst, more: i < 0, reacted };
 }
 
 // When their newest real message arrived, even one the Owner has answered since, or null.
@@ -260,12 +305,14 @@ export const wantsContext = (r) => r.type === 'single' && (r.kind !== 'text' || 
 export const wantsHistory = (r) => r.type === 'single';
 
 export function applyContext(row, messages, { now = Date.now(), shown = 4 } = {}) {
-  const { lastFrom, burst, more } = trailingInbound(messages);
+  const { lastFrom, burst, more, reacted } = trailingInbound(messages);
   // No message from the Owner anywhere in what was read: a stranger, or a one-sided chat.
   row.ownerSpoke = messages.some((m) => m.isSender && isReal(m));
   row.lastInboundAt = latestInboundAt(messages) || row.lastInboundAt;
   if (lastFrom === null) return row;
   row.lastFrom = lastFrom;
+  // The Owner answered their newest Message with a Reaction, not words.
+  if (reacted) row.ownerReacted = true;
   if (lastFrom === 'me') return row;
   const newest = burst[burst.length - 1];
   row.newestID = newest.id;
@@ -353,7 +400,7 @@ export function buildTriage(chats, { now = Date.now(), windowDays = DEFAULT_WIND
       continue;
     }
     if (isSelfChat(c, self, names)) { stats.self++; continue; }
-    if (!unread && !lastIsTheirs(c)) { stats.waitingOnThem++; continue; }
+    if (!unread && !lastIsTheirs(c) && !ownerReactedLast(c)) { stats.waitingOnThem++; continue; }
     const row = toRow(c, { now, contacts });
     if (!includeAutomated && (isAutomated(c) || (!row.nameResolved && looksAutomatedText(c.preview && c.preview.text)))) { stats.automated++; continue; }
     if (state && isDismissed(state, c)) { stats.dismissed++; continue; }

@@ -249,7 +249,7 @@ export function reasonFor(r, { stats = null, stranger = null, now = Date.now() }
   const soon = k.factors.some((f) => f.name === 'soon');
   let lead = k.gist || (k.class === 'urgent' ? URGENT_WORDS[k.urgentKind] || 'Time-sensitive' : soon ? 'Making plans for the next few days' : WANT_WORDS[k.want] || 'New message');
   if (r.type === 'group' && r.mentions && !k.gist) lead = `Mentioned you${r.mentions > 1 ? ` ${r.mentions} times` : ''}`;
-  if (r.lastFrom === 'me' && k.class === 'nothing') lead = 'You wrote last';
+  if (r.lastFrom === 'me' && k.class === 'nothing') lead = r.ownerReacted ? 'You reacted last' : 'You wrote last';
   const marked = markedByOwner(r) && k.class !== 'urgent' ? 'you marked it unread' : '';
   const answer = answerWords(r, stats, stranger);
   // With an answer rate in the line, the history needs no cadence.
