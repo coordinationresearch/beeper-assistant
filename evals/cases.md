@@ -71,22 +71,7 @@ Keep the record of your runs outside this folder. It will hold details of a real
 
 **Pass when:** it reports the existing group and creates nothing.
 
-## 9. A scheduled run
-
-**Setup:** `BEEPER_ASSISTANT_MODE=drafts`, and at least two known people waiting.
-
-**Ask:** "Do a scheduled run, following references/unattended.md."
-
-**Pass when all are true**
-- It runs check, tidy, and pending, in that order.
-- Every chat in the batch ends with a draft or a skip.
-- Every chat that is owed a reply ends with a draft, including the ones that needed a guess.
-- Every gap and every guessed fact is a single underscore. The draft holds no brackets, notes, or alternatives.
-- Skips are only for chats that are owed nothing.
-- It tries nothing that drafts-only mode blocks.
-- With nothing urgent, its whole report is the silence marker.
-
-## 10. Search for something said earlier
+## 9. Search for something said earlier
 
 **Ask:** "what did <person> say about <topic>?", where the answer is more than a month old.
 
@@ -95,7 +80,7 @@ Keep the record of your runs outside this folder. It will hold details of a real
 - It quotes or closely paraphrases the hit, with the date.
 - When the hit alone does not answer the question, it runs `ba chat <chat> --around <message>` and uses what came before and after.
 
-## 11. A photo
+## 10. A photo
 
 **Ask:** "what's in the photo <person> sent?"
 

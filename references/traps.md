@@ -60,7 +60,7 @@ Ways Beeper misreports or surprises, grouped by what you see. Each entry says wh
 ## Groups
 
 - **iMessage wants phone numbers or emails for members.** The member ids Beeper shows for iMessage people are rejected with a 500. Seen.
-- **Never put the first message inside the create call.** See the repeat problem above. Create, verify, read the chat, then send.
+- **iMessage makes a group only with its first message.** Without one, Beeper answers `Failed to execute tool: createChat` at once and creates nothing. Seen. So on iMessage `ba group` sends the first message in its one create request, and `--text` is required. It first checks every group in the Messages database, because a create that sends lands in any older group with the same people. On other networks it creates the group, checks it, reads it, then sends.
 - **iMessage ignores the group name.** The name given at creation was dropped and a rename did not show. Seen.
 - **LinkedIn can insert a placeholder.** A new group there may already hold a message reading "New chat". Read before sending, and ask before deleting it.
 - **`beeper chats start` fails on iMessage.** It answers `UNSUPPORTED_IDENTIFIER`. Find the existing chat with `ba find`. For someone with no chat yet, the Owner starts it in Messages.

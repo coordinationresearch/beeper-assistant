@@ -27,7 +27,7 @@ test('an unknown command is a usage error', () => {
 
 test('a name is never accepted where a chat reference is needed', () => {
   for (const cmd of ['chat', 'send', 'draft', 'read', 'dismiss', 'delete', 'react', 'edit', 'contact', 'media', 'notes', 'note']) {
-    const r = run(cmd, 'Ann', '--text', 'hi', '--first', 'A', '--confirmed');
+    const r = run(cmd, 'Ann', ...(cmd === 'note' ? ['--text', 'hi'] : []));
     assert.equal(r.status, 2, cmd);
     assert.match(r.stderr, /not an exact reference/, cmd);
   }
@@ -61,7 +61,7 @@ test('help names the --after requirement for send', () => {
 test('read-only mode blocks every command that writes', () => {
   const ro = { ...env, BEEPER_ASSISTANT_READONLY: '1' };
   for (const cmd of ['draft', 'send', 'read', 'react', 'remind', 'unremind', 'edit', 'delete', 'group', 'start', 'contact']) {
-    const r = spawnSync(process.execPath, [BA, cmd, 'c00000000', '--text', 'hi', '--confirmed'], { env: ro, encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [BA, cmd], { env: ro, encoding: 'utf8' });
     assert.equal(r.status, 2, cmd);
     assert.match(r.stderr, /Read-only mode is on/, cmd);
   }
@@ -95,9 +95,8 @@ test('the mode command tightens and never loosens', () => {
   assert.match(go('mode', 'banana').stderr, /Usage: mode/);
 });
 
-test('the rules for scheduled runs tell the agent to draft with marked gaps, never to skip for a missing fact', () => {
-  const rules = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'references', 'unattended.md'), 'utf8');
-  assert.match(rules, /Draft whenever a reply is owed/);
+test('the skill tells the agent to mark a missing fact with a single underscore, never brackets', () => {
+  const rules = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'SKILL.md'), 'utf8');
   assert.match(rules, /single underscore/);
   assert.equal(/double square brackets/.test(rules), false);
   assert.equal(/skip with the reason/.test(rules), false);

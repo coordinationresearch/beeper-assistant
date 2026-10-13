@@ -252,7 +252,7 @@ test('context replaces a fragment preview with the whole run', () => {
   const t = build([chat({ title: 'Ann', lastFrom: 'them', text: 'or sat' })], { finalize: false });
   const row = t.people[0];
   assert.equal(wantsContext(row), true);
-  applyContext(row, [msg('me', 'ok'), msg('them', 'are you around friday?'), msg('them', 'or sat')]);
+  applyContext(row, [msg('me', 'ok'), msg('them', 'are you around friday?'), msg('them', 'or sat')], { now: NOW });
   assert.equal(row.preview, 'are you around friday? / or sat');
   assert.equal(row.messages, 2);
   assert.deepEqual(names(finalizeTriage(t).people), ['Ann']);
@@ -260,7 +260,7 @@ test('context replaces a fragment preview with the whole run', () => {
 
 test('context drops a read chat where the Owner answered and they only reacted', () => {
   const t = build([chat({ title: 'Ann', lastFrom: 'them', text: 'Liked \u201cyes\u201d' })], { finalize: false });
-  applyContext(t.people[0], [msg('them', 'q?'), msg('me', 'yes'), msg('them', 'Liked \u201cyes\u201d')]);
+  applyContext(t.people[0], [msg('them', 'q?'), msg('me', 'yes'), msg('them', 'Liked \u201cyes\u201d')], { now: NOW });
   finalizeTriage(t);
   assert.equal(t.people.length, 0);
   assert.equal(t.stats.waitingOnThem, 1);
@@ -414,19 +414,21 @@ test('a row says whether its compose box holds text or attachments', () => {
   assert.deepEqual(t.people.map((r) => [r.name, r.draftKind]), [['Ann', 'text'], ['Ben', null]]);
 });
 
-test('a group whose preview is not their message reads back for their newest one, and keeps its rank', async () => {
+test('a group is read before the list is built, and its row reads their Burst as a one-to-one row does', async () => {
   const at = (h) => new Date(NOW - h * 3_600_000).toISOString();
   const chats = [chat({ id: '!club', title: 'Book club', type: 'group', unread: 2, mentions: 1, lastFrom: 'them', text: 'Loved \u201cwho hosts?\u201d', hoursAgo: 1 }),
     chat({ id: '!team', title: 'Team', type: 'group', unread: 1, lastFrom: 'them', text: 'standup moved', hoursAgo: 3 })];
   const read = [];
+  const pages = { '!club': [msg('them', 'who hosts friday?', { timestamp: at(2) }), msg('them', 'Loved \u201cwho hosts?\u201d', { timestamp: at(1) })],
+    '!team': [msg('them', 'standup moved', { timestamp: at(3) })] };
   const reads = { chatsSince: async () => ({ chats, truncated: false }), contacts: async () => contacts, state: () => null,
-    messages: async (id) => { read.push(id); return [msg('them', 'who hosts friday?', { timestamp: at(2) }), msg('them', 'Loved \u201cwho hosts?\u201d', { timestamp: at(1) })]; } };
+    messages: async (id) => { read.push(id); return pages[id]; } };
   const t = await collectTriage(reads, { now: NOW });
   const club = t.groups.find((r) => r.name === 'Book club'), team = t.groups.find((r) => r.name === 'Team');
   assert.equal(club.lastInboundAt, at(2));
-  assert.equal(club.kind, 'reaction', 'the preview still ranks it');
-  assert.equal(team.lastInboundAt, at(3), 'a real message in the preview needs no read');
-  assert.deepEqual(read, ['!club']);
+  assert.deepEqual([club.kind, club.newestID, club.waitingSince], ['text', pages['!club'][0].id, at(2)], 'their question, not the tapback after it');
+  assert.equal(team.lastInboundAt, at(3));
+  assert.deepEqual(read.sort(), ['!club', '!team'], 'every unread group is read, once');
 });
 
 // The Owner's Reaction answers their newest Message (ADR 0085). Beeper gives a bridged network's

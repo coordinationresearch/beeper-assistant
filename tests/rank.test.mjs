@@ -47,14 +47,14 @@ test('what the messages want', () => {
   assert.equal(w(['lunch would be great', "let's do the noodle place thursday"]), 'plan');
   assert.equal(w(['Sounds good, let’s do the cafe!']), 'pleasantry');
   assert.equal(w(['Yup that works!']), 'pleasantry');
-  assert.equal(w(['Thanks, gonna play a little kickball!']), 'pleasantry');
-  assert.equal(w(['Ayyy', 'That’s so sick']), 'pleasantry');
+  assert.equal(w(['Thanks, heading out for a bike ride!']), 'pleasantry');
+  assert.equal(w(['Yooo', 'That’s wild']), 'pleasantry');
   assert.equal(w(['thanks!'], 'known', 'ack'), 'pleasantry');
-  assert.equal(w(['Had surgery a while back and still recovering, it has been a rough month']), 'news');
+  assert.equal(w(['Moved apartments a while back and still unpacking, it has been a long month']), 'news');
   assert.equal(w(['https://example.com/x'], 'known', 'link'), 'fyi');
   assert.notEqual(w(['Thanks for connecting! Our team helps founders boost your reach']), 'pitch', 'a known person is never a pitch');
   assert.equal(w(['Thanks for connecting! Our platform helps founders, would love to show you'], 'new'), 'pitch');
-  assert.equal(w(['Is there a possibility I can still get in now?', 'they stopped me at the entrance', 'would love to collaborate'], 'new'), 'ask', 'a stranger at the door is not a pitch');
+  assert.equal(w(['Can I still come in now?', 'security sent me back to the lobby', 'happy to share more about our team'], 'new'), 'ask', 'a stranger at the door is not a pitch');
   assert.equal(w(['Hi, how are you doing?'], 'new'), 'ask');
   assert.equal(w(['thanks, can you send the deck?']), 'ask', 'a request with thanks is still a request');
 });
@@ -176,9 +176,9 @@ test('Reasons hold no message text, so they are safe to show anywhere', () => {
 });
 
 test('a model judgment decides what is owed and what is urgent', () => {
-  const rows = [row({ id: 'j', texts: ['Had surgery', 'still can’t walk'] }), row({ id: 'k', texts: ['did you get my note?'] }), row({ id: 'u', texts: ['hmm'] })];
+  const rows = [row({ id: 'j', texts: ['Sprained my ankle', 'still can’t walk'] }), row({ id: 'k', texts: ['did you get my note?'] }), row({ id: 'u', texts: ['hmm'] })];
   const judgments = new Map([
-    ['j', { owed: 'yes', want: 'news', urgent: true, urgentKind: 'distress', expiresAt: new Date(NOW + HOUR).toISOString(), gist: 'Recovering from surgery and struggling' }],
+    ['j', { owed: 'yes', want: 'news', urgent: true, urgentKind: 'distress', expiresAt: new Date(NOW + HOUR).toISOString(), gist: 'Healing from a sprained ankle and struggling' }],
     ['k', { owed: 'no', want: 'pleasantry', urgent: false }],
     ['u', { owed: 'unsure', want: 'fyi', urgent: false }],
   ]);
@@ -186,7 +186,7 @@ test('a model judgment decides what is owed and what is urgent', () => {
   const by = Object.fromEntries(rows.map((r) => [r.id, r]));
   assert.equal(rows[0].id, 'j');
   assert.equal(by.j.rank.class, 'urgent');
-  assert.match(by.j.rank.reason, /^Recovering from surgery and struggling · /);
+  assert.match(by.j.rank.reason, /^Healing from a sprained ankle and struggling · /);
   assert.equal(by.k.rank.class, 'nothing');
   assert.equal(by.u.rank.class, 'unsure');
 });
@@ -287,13 +287,19 @@ test('the mark keeps a Chat waiting even when the Owner seldom answers it', () =
   assert.deepEqual(by, { u: ['waiting', 'marked-unread'], n: ['waiting', 'marked-unread'], y: ['waiting', null], s: ['waiting', 'marked-unread'] });
 });
 
-test('groups rank on mentions and how much the Owner writes there', () => {
+test('groups rank on mentions and how much the Owner writes there, and by rules alone a mention is Unsure', () => {
+  // A mention addresses the Owner, and an Addressed group waits for the Judgment (ADR 0030, 0145).
   const rows = [row({ id: 'g1', type: 'group', mentions: 1, texts: ['@owner thoughts?'] }), row({ id: 'g2', type: 'group', texts: ['anyone up for dinner friday?'] })];
   rank(rows, { g1: counts({ owner: 2, theirs: 300 }), g2: counts({ owner: 40, theirs: 60, owner90: 30, ownerWeeks26: 8 }) });
-  assert.equal(rows[0].id, 'g1');
-  assert.equal(rows[0].rank.class, 'waiting');
-  assert.match(rows[0].rank.reason, /^Mentioned you · a group you rarely write in/);
-  assert.equal(rows[1].rank.class, 'unsure');
+  const [g1, g2] = ['g1', 'g2'].map((id) => rows.find((r) => r.id === id));
+  assert.equal(g1.rank.class, 'unsure');
+  assert.ok(g1.rank.factors.some((f) => f.name === 'mentions'), 'a mention still adds to its score');
+  assert.match(g1.rank.reason, /^Mentioned you · a group you rarely write in/);
+  assert.equal(g2.rank.class, 'unsure');
+  // Read, its messages showed the mention outside their Burst: it addresses nobody.
+  const stale = [Object.assign(row({ id: 'g3', type: 'group', mentions: 1, texts: ['nice'] }), { addressed: null })];
+  rank(stale, { g3: counts({ owner: 2, theirs: 300 }) });
+  assert.equal(stale[0].rank.class, 'nothing');
 });
 
 test('counts read short', () => {

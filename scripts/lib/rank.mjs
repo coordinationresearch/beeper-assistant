@@ -29,7 +29,7 @@ export function closenessOf(row, stats) {
 const KNOWS = new Set(['close', 'known', 'light']);
 
 // ---- What the latest messages want ----
-const QUESTION = /\?(?!\S*\/)/; // a question mark, not one inside a link
+export const QUESTION = /\?(?!\S*\/)/; // a question mark, not one inside a link
 const REQUEST = /\b(can|could|would|will) (you|u)\b|\bcan u\b|\blmk\b|\blet me know\b|\bplease\b|\bpls\b|\bany chance\b|\bwondering if\b|\bdo you (know|have|want|think)\b|\bthoughts\b|\bneed (you|your|a)\b|\bmind (if|sending|sharing)\b|\bsend (me|over)\b|\bintro(duce)? (me|us)\b/i;
 const PLAN = /\b(lunch|dinner|coffee|drinks?|breakfast|brunch|hang|meet( up)?|call|catch ?up|gym|join|hosting|party|tonight|tomorrow|today|this (week|weekend|morning|afternoon|evening)|next (week|month)|(mon|tues|wednes|thurs|fri|satur|sun)day|noon|\d{1,2}(:\d\d)?\s?(am|pm|a|p)\b|\d{1,2}\/\d{1,2})\b/i;
 // A thanks or sign-off with a few more words: "Sounds good, let's do the cafe!", "Yup that works!".
@@ -37,10 +37,10 @@ const CLOSER = /\b(thanks?|thank (you|u)|thx|ty|appreciate (it|you|that)|sounds 
 const PITCH = /\b(thanks? (you )?for (connecting|the connection|accepting)|nice to (connect|be connected)|came across your (profile|work)|wanted to connect|reach(ing)? out (to|regarding|about)|would love to (connect|chat|show|share|hop)|our (team|company|platform|product|agency|clients?)|opportunit(y|ies)|partnership|collaborat|book a (call|demo)|demo\b|happy to share|we help|i help\b|i lead\b|invite you to|sign up|register\b|webinar|free trial|boost your|media opportunit|press|sponsor)/i;
 // A day named in a plan. SKILL.md already puts anything due in the next three days first.
 const SOON = /\b(today|tonight|tomorrow|tmrw|this (morning|afternoon|evening|week|weekend)|(mon|tues|wednes|thurs|fri|satur|sun)day)\b/i;
-// Short hype with nothing to answer: "Ayyy / That's so sick".
+// Short hype with nothing to answer: "Yooo / That's wild".
 const HYPE = /\b(ay+|yo+|sick|dope|lit|fire|nice|cool|wow|omg|insane|crazy|wild|legend|hell yeah|let'?s go+|so good|love (it|that|this))\b/i;
 // Waiting costs something today. Distress and safety are left to a model, which can tell
-// "in the hospital" from "had surgery five weeks ago".
+// "in the hospital" from "broke my wrist five weeks ago".
 const NOW_CUE = /\bnow\?|\b(asap|urgent(ly)?|emergency|right now|here now|i'?m (here|outside)|outside|(at|in) the (door|entrance|front|gate|lobby)|running late|locked out|today by|by (tonight|today|eod|end of (the )?day|noon)|in (an|one) hour|in \d+ ?(min|mins|minutes))\b/i;
 
 // `texts` is the run of their messages since the Owner last wrote, oldest first.
@@ -80,7 +80,12 @@ const CLOSE_POINTS = { close: 14, known: 10, light: 5, unknown: 3, new: 0 };
 function baseClass(r) {
   const knows = KNOWS.has(r.closeness);
   if (r.type === 'group') {
-    if (r.mentions > 0) return 'waiting';
+    // A group that Addressed the Owner (addressed.mjs), a Beeper mention included, is one the
+    // Judgment decides on: the rules can't tell what was put to the Owner from the room's chatter, so
+    // until then only the Owner can tell, and it never counts in the menu bar number by rules alone
+    // (ADR 0030, 0145). A mention on a group nobody read the messages of counts the same. One whose
+    // messages show the mention outside their Burst addresses nobody.
+    if (r.addressed || (r.addressed === undefined && r.mentions > 0)) return 'unsure';
     if (r.closeness === 'close' && (r.want === 'ask' || r.want === 'plan')) return 'unsure';
     return 'nothing';
   }

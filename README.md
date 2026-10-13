@@ -83,7 +83,7 @@ It can also react, edit, unsend, set reminders, and start groups.
 - **It runs on your Mac.** There is no server and no account, and it collects nothing.
 - **Your agent reads the messages it works with.** That text goes to whichever AI model your agent uses, the same as anything else you show your agent. If you would not paste a chat into your agent, do not ask the skill about it.
 - **How much it reads.** "What needs my reply?" gives your agent one line per waiting chat: the name, the app, and the last message or few. On a busy account that is a few pages of text. Opening one chat gives it the last 20 messages of that chat. A search gives it up to 20 matching messages, and reading around one gives it 20 more. For that, it reads Beeper's history file and, for iMessage, the Mac's Messages database, both read-only. Opening a photo or file sends that file to the model.
-- **It keeps a small folder,** at `~/.config/beeper-assistant/`. `state.json` holds chat and message ids: a lookup table for the short references the skill uses, and the chats you dismissed or had drafted. It stores no names and no message text. `notes/` holds one file per chat with the Notes agents saved about that person and the Owner's own Notes from the companion, each with its author and the messages it came from. Photos and files your agent opens are copied into `media/` there and deleted after two days. Scheduled runs on an iMessage account queue draft text in `outbox.jsonl` for two days.
+- **It keeps a small folder,** at `~/.config/beeper-assistant/`. `state.json` holds chat and message ids: a lookup table for the short references the skill uses, and the chats you dismissed or had drafted. It stores no names and no message text. `notes/` holds one file per chat with the Notes agents saved about that person and the Owner's own Notes from the companion, each with its author and the messages it came from. Photos and files your agent opens are copied into `media/` there and deleted after two days.
 - The companion also keeps signed scoped Owner instructions in a reserved document under `notes/`, using the key `__companion_owner_instructions_v1__`. It preserves the original words, scope, originating Chat and Ask turn, and correction or Undo history. Consumers read these records and verify their signatures before treating them as instructions; only the companion signs changes. `ba notes` does not merge these records into its per-chat output. The companion supplies applicable instructions to Ask and drafting prompts for whichever Harness runs them.
 - **Messages from other people are treated as untrusted.** The skill marks them and tells your agent to never follow instructions inside them. That lowers the risk of a message tricking your agent. It does not remove it.
 - **Beeper is a separate product,** with its own account, pricing, and privacy terms. The skill only sees chats you have connected to Beeper.
@@ -108,11 +108,9 @@ export BEEPER_ASSISTANT_MODE=drafts     # read, and save drafts and Notes
 
 Read-only is a good way to try it for the first time. Your agent can switch it on for you: ask it to "start in read-only mode". Loosening a mode is left to you, by editing or deleting that file.
 
-## Drafts on a schedule
+## Drafts in the background
 
-Point a scheduler at your agent and ask it to follow `references/unattended.md`. Each run drafts replies for a few people you have written to before, puts them straight into Beeper, and stays silent unless something is urgent. A scheduled run can never send.
-
-These drafts are starting points. The run drafts whenever a reply is owed, even when it has to guess. Where it does not know something it leaves a single underscore, as in `I land _ and could do dinner`, so the blank is quick to find and replace.
+The skill drafts only when you ask. Beeper Companion's Agent Drafts draft replies in the background and never send them.
 
 Drafts show up in Beeper on your other devices, on every app except iMessage. iMessage drafts stay on the Mac that saved them.
 

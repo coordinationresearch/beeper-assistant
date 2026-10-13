@@ -3,8 +3,8 @@
 #
 # Inside the Beeper Companion app when it can, so a Mac needs neither Node nor the Beeper
 # CLI: the app runs its own copy of the skill and reaches Beeper with its own approval.
-# An app that has this turned off answers 64 before it touches anything, and the skill runs
-# with Node 18 or newer instead, as it always has.
+# An app where the Owner removed the skill in Settings answers 64 before it touches anything,
+# and the skill runs with Node 18 or newer instead, as it always has.
 dir=$(cd "$(dirname "$0")" && pwd)
 
 # The app opens its sealed approval through the login keychain, which macOS finds under
@@ -23,8 +23,13 @@ elif [ -n "$HOME" ] && [ -n "$real_home" ] && same_dir "$HOME" "$real_home"; the
 fi
 
 # An app that can run the skill carries a skill-runtime file; an older one would open its
-# windows instead, so it is never asked. BEEPER_COMPANION_APP names one, for tests.
+# windows instead, so it is never asked. The copy an app bundles runs that app, so its scripts
+# match the instructions next to them. BEEPER_COMPANION_APP names one, for tests.
 find_app() {
+  case "$dir" in */Contents/Resources/app/skill/beeper-assistant)
+    a=${dir%/Contents/Resources/app/skill/beeper-assistant}
+    [ -f "$a/Contents/Resources/app/skill-runtime" ] && { printf '%s\n' "$a"; return 0; } ;;
+  esac
   if [ -n "$BEEPER_COMPANION_APP" ]; then
     [ -f "$BEEPER_COMPANION_APP/Contents/Resources/app/skill-runtime" ] && { printf '%s\n' "$BEEPER_COMPANION_APP"; return 0; }
     return 1
@@ -53,6 +58,6 @@ if [ "$home_ok" = 0 ]; then
   exit 78
 fi
 echo "FAIL  beeper-assistant needs the Beeper Companion app, or Node 18 or newer." >&2
-echo "      Fix: open Beeper Companion, then Settings → Previews → Run the skill inside Beeper Companion." >&2
+echo "      Fix: open Beeper Companion. If you removed the skill in Settings → Skill, click Install there." >&2
 echo "      Or install Node: brew install node" >&2
 exit 127

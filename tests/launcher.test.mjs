@@ -2,7 +2,7 @@
 // whose "binary" is a shell script that records how it was called.
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir, userInfo } from 'node:os';
 import { dirname, join } from 'node:path';
 import { test } from 'node:test';
@@ -64,4 +64,25 @@ test('an empty HOME is not a home folder, and an unset one is the real home', ()
   const r = spawnSync('/bin/sh', [BA, 'check'], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin', BEEPER_COMPANION_APP: unset.app } });
   assert.equal(r.status, 0);
   assert.equal(unset.calls().length, 1);
+});
+
+test('app status runs without Node and an app refusal never falls back', () => {
+  const stub = stubApp(1);
+  const r = run({ HOME: userInfo().homedir, BEEPER_COMPANION_APP: stub.app }, ['app', 'status']);
+  assert.deepEqual(stub.calls(), ['--beeper-assistant app status']);
+  assert.equal(r.status, 1);
+  assert.doesNotMatch(r.stderr, /needs .*Node/);
+});
+
+test('the copy an app bundles runs that app, before any other, and is run as it was copied', () => {
+  const bundling = stubApp(0), other = stubApp(0);
+  // Copied as the app's build copies the skill (scripts/build.mjs, fs cp), so the executable bit
+  // must survive the copy for the launcher to run on its own.
+  const inner = join(bundling.app, 'Contents', 'Resources', 'app', 'skill', 'beeper-assistant');
+  mkdirSync(inner, { recursive: true });
+  cpSync(BA, join(inner, 'ba'));
+  const r = spawnSync(join(inner, 'ba'), ['app', 'status'], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin', HOME: userInfo().homedir, BEEPER_COMPANION_APP: other.app } });
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(bundling.calls(), ['--beeper-assistant app status']);
+  assert.deepEqual(other.calls(), [], 'not another app, whatever its place');
 });

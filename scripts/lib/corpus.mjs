@@ -5,6 +5,7 @@ import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
+import { formatMedia, linkParts } from './media-context.mjs';
 
 export const corpusPath = () => process.env.BEEPER_ASSISTANT_CORPUS || join(homedir(), 'Library', 'Application Support', 'Beeper Companion', 'corpus.db');
 
@@ -37,6 +38,66 @@ async function query(file, sql, { write = false } = {}) {
   }
 }
 const str = (s) => `'${String(s).replace(/'/g, "''")}'`;
+
+// Restrict a read to the exact Chat, including its verified iMessage alias. The same
+// GUID offered under another Chat never acquires that Chat's image text.
+const chatWhere = (id) => `(c.chat_key=${str(id)} OR c.beeper_chat_id=${str(id)} OR c.chat_key IN (SELECT chat_key FROM chat_aliases WHERE alias=${str(id)}))`;
+export async function withMediaContext(chatID, messages, file = corpusPath()) {
+  const live = messages.map(m => {
+    const { mediaContext: previous, ...raw } = m;
+    if (m.isDeleted || m.isHidden) return raw;
+    const parts = linkParts(m.links);
+    return { ...raw, ...(parts.length ? { mediaContext: formatMedia(parts) } : {}) };
+  });
+  if (!existsSync(file) || !messages.length) return live;
+  try {
+    const ids = messages.slice(0, 500).filter(m => !m.isDeleted && !m.isHidden).map(m => str(String(m.id)));
+    if (!ids.length) return live;
+    const rows = await query(file, `WITH target AS (SELECT c.chat_key FROM chats c WHERE ${chatWhere(chatID)})
+      SELECT m.message_key, m.source_id, m.edited_at, mm.text FROM message_media mm JOIN messages m ON m.message_key=mm.message_key
+      JOIN chats c ON c.chat_key=m.chat_key WHERE m.chat_key IN (SELECT chat_key FROM target) AND (SELECT count(*) FROM target)=1 AND m.retracted=0 AND m.source_state='present' AND m.duplicate_of IS NULL
+      AND (substr(m.message_key, instr(m.message_key, ':')+1) IN (${ids.join(',')}) OR (m.source='beeper' AND cast(m.source_id AS text) IN (${ids.join(',')})))`);
+    const byID = new Map();
+    for (const r of rows) {
+      byID.set(r.message_key.slice(r.message_key.indexOf(':') + 1), r);
+      if (r.message_key.startsWith('beeper:')) byID.set(String(r.source_id), r);
+    }
+    return live.map(m => {
+      const cached = byID.get(String(m.id));
+      if (m.isDeleted || m.isHidden || m.mediaContext || !cached) return m;
+      if (m.editedTimestamp && Date.parse(m.editedTimestamp) !== cached.edited_at) return m;
+      return { ...m, mediaContext: cached.text };
+    });
+  } catch { return live; } // Older Corpus, permission denied, or no media index yet.
+}
+
+/** @param {{query: string, chatID?: string, from?: string, media?: string[], sinceMs?: number, max?: number}} options */
+export async function searchMedia({ query: words, chatID, from, media = [], sinceMs = 0, max = 20 }, file = corpusPath()) {
+  if (!existsSync(file) || !words?.trim()) return { items: [], chats: {} };
+  const terms = words.trim().split(/\s+/).map(w => `"${w.replace(/"/g, '""')}"`).join(' ');
+  const where = ["message_media_fts MATCH " + str(terms), "m.source_state='present'", 'm.retracted=0', 'm.duplicate_of IS NULL', `m.sent_at >= ${Number(sinceMs) || 0}`];
+  if (chatID) where.push(chatWhere(chatID));
+  if (from) where.push(`m.from_owner=${from === 'me' ? 1 : 0}`);
+  if (media.length && !media.includes('any')) {
+    const kinds = media.filter(m => m === 'image' || m === 'link');
+    if (!kinds.length) return { items: [], chats: {} };
+    where.push(`EXISTS(SELECT 1 FROM json_each(mm.parts) p WHERE json_extract(p.value,'$.kind') IN (${kinds.map(str).join(',')}))`);
+  }
+  try {
+    const rows = await query(file, `SELECT m.message_key,m.source_id,m.source,m.text,m.from_owner,m.sent_at,mm.text AS media_context,c.network,c.kind,c.title,
+      coalesce(c.beeper_chat_id,(SELECT alias FROM chat_aliases WHERE chat_key=c.chat_key ORDER BY alias LIMIT 1),CASE WHEN c.source='beeper' THEN c.chat_key END) AS chat_id
+      FROM message_media_fts JOIN message_media mm ON mm.id=message_media_fts.rowid JOIN messages m ON m.message_key=mm.message_key
+      JOIN chats c ON c.chat_key=m.chat_key WHERE ${where.join(' AND ')} ORDER BY m.sent_at DESC LIMIT ${Math.min(100, Math.max(1, Number(max) || 20))}`);
+    const items = [], chats = {};
+    for (const r of rows) {
+      if (!r.chat_id) continue;
+      chats[r.chat_id] = { id: r.chat_id, title: r.title, network: r.network, type: r.kind };
+      items.push({ id: r.source === 'imessage' ? r.message_key.slice(9) : String(r.source_id), chatID: r.chat_id,
+        isSender: r.from_owner === 1, timestamp: new Date(r.sent_at).toISOString(), text: r.text ?? '', mediaContext: r.media_context });
+    }
+    return { items, chats };
+  } catch { return { items: [], chats: {} }; }
+}
 
 // Null when there is no usable corpus, with the reason, so the caller can say why it fell back.
 export async function openCorpus(file = corpusPath()) {
@@ -113,6 +174,9 @@ export async function corpusMessage(file, key) {
 
 // The Mind map the Beeper Companion writes for agents, next to its corpus, or null when it has none.
 export const mindMapPath = (file = corpusPath()) => join(dirname(file), 'mind-map.md');
+// The Person File the Beeper Companion keeps for one Person, next to the corpus, written from their
+// messages and edited by the Owner. Person IDs are p_ and hex digits.
+export const personFilePath = (id, file = corpusPath()) => join(dirname(file), 'people', `${String(id).replace(/[^A-Za-z0-9_-]/g, '')}.md`);
 
 // One Person: Chats on every network, stats, open conflicts, and suggested matches.
 export async function personProfile(file, id) {

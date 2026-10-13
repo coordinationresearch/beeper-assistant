@@ -9,7 +9,9 @@ import { fileURLToPath } from 'node:url';
 
 const SKILL = join(dirname(fileURLToPath(import.meta.url)), '..');
 // BEEPER_BIN points nowhere, so the check at the end of an install can never reach a real account.
-const sh = (script, ...args) => spawnSync('/bin/bash', [script, ...args], { encoding: 'utf8', env: { ...process.env, GIT_CEILING_DIRECTORIES: tmpdir(), BEEPER_BIN: '/nonexistent/beeper', BEEPER_ASSISTANT_HOME: mkdtempSync(join(tmpdir(), 'ba-st-')) } });
+// BEEPER_COMPANION_APP names an app that isn't there, so the launcher runs the skill with Node even
+// on a Mac where Beeper Companion is installed, and the check reports this setup, not that Mac's.
+const sh = (script, ...args) => spawnSync('/bin/bash', [script, ...args], { encoding: 'utf8', env: { ...process.env, GIT_CEILING_DIRECTORIES: tmpdir(), BEEPER_BIN: '/nonexistent/beeper', BEEPER_ASSISTANT_HOME: mkdtempSync(join(tmpdir(), 'ba-st-')), BEEPER_COMPANION_APP: join(tmpdir(), 'no-such-app', 'Beeper Companion.app') } });
 const writable = (p) => { try { accessSync(p, constants.W_OK); return true; } catch { return false; } };
 
 // A copy of the skill outside any git repo, the way a downloaded folder would be.
@@ -26,7 +28,7 @@ test('the installer finishes from a folder that is not a git checkout', () => {
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /Copied .*read-only, revision not from git/);
   const dest = join(target, 'beeper-assistant');
-  for (const f of ['SKILL.md', 'INSTALLED', 'ba', 'scripts/ba.mjs', 'scripts/ba-unattended.mjs', 'scripts/lib/triage.mjs', 'references/traps.md', 'references/unattended.md']) assert.ok(existsSync(join(dest, f)), f);
+  for (const f of ['SKILL.md', 'INSTALLED', 'ba', 'scripts/ba.mjs', 'scripts/lib/triage.mjs', 'references/traps.md']) assert.ok(existsSync(join(dest, f)), f);
   assert.equal(writable(join(dest, 'SKILL.md')), false);
   assert.match(readFileSync(join(dest, 'INSTALLED'), 'utf8'), /revision: not from git/);
 });

@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { decideSame, emailKey, findPeople, openCorpus, personProfile, phoneDigits } from '../scripts/lib/corpus.mjs';
 import { renderWho } from '../scripts/lib/render.mjs';
 
-const JO = emailKey('jopark@googlemail.com');
+const JO = emailKey('fixture5550100001@googlemail.com');
 const BA = join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'ba.mjs');
 const NOW = Date.now();
 const DAY = 86_400_000;
@@ -88,7 +88,7 @@ test('who reads one person from the corpus: chats with references, stats, and su
 test('who finds a person by number or by any spelling of a Gmail address', () => {
   assert.match(run(makeCorpus(), 'who', '(555) 010-0132').stdout, /^WHO · Sam Rivera/);
   assert.match(run(makeCorpus(), 'who', '+1 555 010 0132').stdout, /^WHO · Sam Rivera/);
-  const jo = run(makeCorpus(), 'who', 'Jo.Park+news@googlemail.com').stdout;
+  const jo = run(makeCorpus(), 'who', 'Fixture.5550100001+example@googlemail.com').stdout;
   assert.match(jo, /^WHO · Jo Park/);
   assert.match(jo, /not linked to Beeper yet, use find/);
   assert.match(jo, /Identity conflict \(shared_address\)/);
@@ -124,7 +124,7 @@ test('who is a read, so read-only mode allows it', () => {
 });
 
 test('the matching keys agree with the companion', async () => {
-  assert.equal(emailKey('Jo.Park+news@GoogleMail.com'), JO);
+  assert.equal(emailKey('Fixture.5550100001+example@GoogleMail.com'), JO);
   assert.equal(emailKey('Jo.Park+news@example.org'), 'jo.park+news@example.org');
   assert.equal(phoneDigits('+1 (555) 010-0132'), '5550100132');
   assert.equal(phoneDigits('12345'), null);

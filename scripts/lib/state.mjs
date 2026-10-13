@@ -10,13 +10,13 @@ export function stateDir() {
 }
 
 const file = () => join(stateDir(), 'state.json');
-const EMPTY = () => ({ version: 1, dismissed: {}, aliases: {}, drafted: {}, skipped: {}, placed: {} });
+const EMPTY = () => ({ version: 1, dismissed: {}, aliases: {}, drafted: {} });
 
-// Several processes write this file: `ba` in an agent, the hourly unattended run, and the
-// companion. Each one loaded its own copy earlier, so a plain overwrite would drop what another
-// wrote in between, such as a dismissal. Saving therefore takes a lock, reads the file again,
-// and applies only the entries this process changed since it loaded.
-const MAPS = ['dismissed', 'aliases', 'drafted', 'skipped', 'placed'];
+// Several processes write this file: `ba` in each agent, and the companion. Each one loaded its
+// own copy earlier, so a plain overwrite would drop what another wrote in between, such as a
+// dismissal. Saving therefore takes a lock, reads the file again, and applies only the entries
+// this process changed since it loaded.
+const MAPS = ['dismissed', 'aliases', 'drafted'];
 const BASE = Symbol('loaded');
 const clone = (s) => Object.fromEntries(MAPS.map((m) => [m, JSON.parse(JSON.stringify(s[m] || {}))]));
 
@@ -25,7 +25,7 @@ function readState() {
     const s = JSON.parse(readFileSync(file(), 'utf8'));
     const aliases = {};
     for (const [k, v] of Object.entries(s.aliases || {})) if (v && v.id) aliases[k] = v.chat ? { id: v.id, chat: v.chat } : { id: v.id };
-    return { ...EMPTY(), ...s, dismissed: s.dismissed || {}, aliases, drafted: s.drafted || {}, skipped: s.skipped || {}, placed: s.placed || {} };
+    return { ...EMPTY(), ...s, dismissed: s.dismissed || {}, aliases, drafted: s.drafted || {} };
   } catch {
     return EMPTY();
   }
@@ -144,64 +144,39 @@ export function isDismissed(state, chat) {
   return d.messageID !== null && d.messageID === current;
 }
 
-export function pruneDismissed(state, chats) {
+// keep: a Chat whose Dismiss may still hold though its preview changed, such as a group whose preview
+// is now a Reaction or a notice (triage.mjs dismissalHolds decides once its messages are read).
+export function pruneDismissed(state, chats, keep = () => false) {
   const byID = new Map(chats.map((c) => [c.id, c]));
   let removed = 0;
   for (const id of Object.keys(state.dismissed)) {
     const c = byID.get(id);
-    if (c && !isDismissed(state, c)) { delete state.dismissed[id]; removed++; }
+    if (c && !isDismissed(state, c) && !keep(c)) { delete state.dismissed[id]; removed++; }
   }
   return removed;
 }
 
-// ---- unattended runs ----
-// Records hold chat ids, message ids, and hashes. Never names or message text.
+// ---- the Line's own Chat ----
+// The Companion writes line-chat.json, { "chatKey": sha256 of the Chat ID in hex }, for the Chat
+// in Beeper between the Owner and their Line. A message written there would reach the Companion
+// as the Owner's own text, so no command writes into it. A missing or unreadable file names no
+// Chat, and then nothing is refused.
+export const lineChatKey = (chatID) => createHash('sha256').update(String(chatID)).digest('hex');
+export function isLineChat(chatID, dir = stateDir()) {
+  let key;
+  try { key = JSON.parse(readFileSync(join(dir, 'line-chat.json'), 'utf8')).chatKey; } catch { return false; }
+  return typeof key === 'string' && /^[a-f0-9]{64}$/.test(key) && key === lineChatKey(chatID);
+}
+
+// ---- drafts this skill saved ----
+// Each record, under its chat id, holds a hash of the draft and when it was saved. Never names or
+// message text.
 
 export const textHash = (s) => createHash('sha1').update(String(s || '').replace(/\s+/g, ' ').trim()).digest('hex').slice(0, 12);
 
 export function recordDraft(state, chatID, { forMessage = null, text, now = Date.now() }) {
   state.drafted[chatID] = { forMessage, textHash: textHash(text), at: new Date(now).toISOString() };
-  delete state.skipped[chatID];
   return state;
-}
-
-export function recordSkip(state, chatID, { forMessage, reason = '', now = Date.now() }) {
-  state.skipped[chatID] = { forMessage, reason: String(reason).slice(0, 80), at: new Date(now).toISOString() };
-  return state;
-}
-
-export const wasDraftedFor = (state, chatID, messageID) => !!messageID && !!state.drafted[chatID] && state.drafted[chatID].forMessage === messageID;
-export const wasSkippedFor = (state, chatID, messageID) => !!messageID && !!state.skipped[chatID] && state.skipped[chatID].forMessage === messageID;
-
-// The outbox carries drafts to another machine, for chats whose drafts do not sync.
-// It does hold the draft text, so it is kept short-lived.
-const outboxFile = () => join(stateDir(), 'outbox.jsonl');
-const OUTBOX_KEEP_MS = 48 * 3_600_000;
-
-export function readOutbox({ now = Date.now() } = {}) {
-  let raw = '';
-  try { raw = readFileSync(outboxFile(), 'utf8'); } catch { return []; }
-  const out = [];
-  for (const line of raw.split('\n')) {
-    if (!line.trim()) continue;
-    try { const e = JSON.parse(line); if (e && e.id && now - Date.parse(e.createdAt) < OUTBOX_KEEP_MS) out.push(e); } catch { /* skip a bad line */ }
-  }
-  return out;
-}
-
-export function appendOutbox(entry, { now = Date.now() } = {}) {
-  mkdirSync(stateDir(), { recursive: true });
-  // Rewrite without expired entries, and replace an older entry for the same chat.
-  const kept = readOutbox({ now }).filter((e) => e.id !== entry.id && e.chatKey !== entry.chatKey);
-  kept.push(entry);
-  const tmp = `${outboxFile()}.${process.pid}.tmp`;
-  writeFileSync(tmp, kept.map((e) => JSON.stringify(e)).join('\n') + '\n', { mode: 0o600 });
-  renameSync(tmp, outboxFile());
-}
-
-export function dropFromOutbox(chatKey, { now = Date.now() } = {}) {
-  const kept = readOutbox({ now }).filter((e) => e.chatKey !== chatKey);
-  try { writeFileSync(outboxFile(), kept.map((e) => JSON.stringify(e)).join('\n') + (kept.length ? '\n' : ''), { mode: 0o600 }); } catch { /* nothing to drop */ }
 }
 
 // ---- attachment copies ----

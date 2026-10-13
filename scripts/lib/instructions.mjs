@@ -14,7 +14,8 @@ export const INSTRUCTION_MAX_CHARS = 2000;
 /** @typedef {{dir?: string, now?: number, waitMs?: number, sign: (instruction: Omit<OwnerInstruction, 'sig'>) => string, shouldCommit?: () => boolean|Promise<boolean>}} InstructionOptions */
 /** @typedef {{status: 'added'|'duplicate'|'stale', instruction?: OwnerInstruction}} AddInstructionResult */
 /** @typedef {{status: 'undone'|'already-undone'|'missing'|'stale', instruction?: OwnerInstruction, restored?: OwnerInstruction}} UndoInstructionResult */
-/** @typedef {AddInstructionResult | UndoInstructionResult} InstructionResult */
+/** @typedef {{status: 'deleted'|'missing'|'replaced'|'stale', removed?: OwnerInstruction[]}} DeleteInstructionResult */
+/** @typedef {AddInstructionResult | UndoInstructionResult | DeleteInstructionResult} InstructionResult */
 
 const object = v => v !== null && typeof v === 'object' && !Array.isArray(v);
 const keys = (value, required, optional = []) => object(value)
@@ -145,5 +146,39 @@ export async function undoInstruction(id, { dir, sign, shouldCommit, waitMs } = 
     const next = items.map(i => i === target ? instruction : restored && i === previous ? restored : i);
     if (!await commit(save, { ...doc, instructions: next }, shouldCommit)) return { status: 'stale' };
     return { status: 'undone', instruction, ...(restored ? { restored } : {}) };
+  }, { dir, waitMs });
+}
+
+/** Delete removes records rather than marking them, because every reader, older skill copies
+ * included, rejects the whole file over a status it doesn't know. It takes the named record and,
+ * when that record is in use, the versions it replaced. Nothing is restored. Any record left
+ * naming a removed one in supersedes, such as an undone later version, goes too: a reader also
+ * rejects a supersedes that names nothing. Each signature covers only its own record, so the rest
+ * keep theirs. Refused for a record a still-active version replaced; delete that version instead.
+ * @param {string} id
+ * @param {InstructionOptions} options
+ * @returns {Promise<DeleteInstructionResult>}
+ */
+export async function deleteInstruction(id, { dir, sign, shouldCommit, waitMs } = {}) {
+  if (!identifier(id, 128)) throw new NotesError('Choose a valid Owner instruction to delete. Nothing was changed.');
+  return withLock(OWNER_INSTRUCTIONS_KEY, async (doc, save) => {
+    const items = verifiedRecords(doc, sign);
+    if (shouldCommit && !await shouldCommit()) return { status: 'stale' };
+    const target = items.find(i => i.id === id);
+    if (!target) return { status: 'missing' };
+    const byID = new Map(items.map(i => [i.id, i]));
+    if (items.some(i => i.status === 'active' && descendsFrom(i, id, byID))) return { status: 'replaced' };
+    const gone = new Set([id]);
+    // An undone record replaced nothing still out of use: Undo gave its predecessor back.
+    if (target.status !== 'undone') {
+      for (let previous = byID.get(target.supersedes); previous?.status === 'superseded'; previous = byID.get(previous.supersedes)) gone.add(previous.id);
+    }
+    // A record names only an earlier one, so one pass in file order finds every later record that
+    // still names a removed one.
+    for (const item of items) if (item.supersedes && gone.has(item.supersedes)) gone.add(item.id);
+    if (items.some(i => i !== target && gone.has(i.id) && i.status === 'active')) return { status: 'stale' };
+    const removed = items.filter(i => gone.has(i.id));
+    if (!await commit(save, { ...doc, instructions: items.filter(i => !gone.has(i.id)) }, shouldCommit)) return { status: 'stale' };
+    return { status: 'deleted', removed };
   }, { dir, waitMs });
 }

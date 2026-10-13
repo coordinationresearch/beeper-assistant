@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
-import { buildIndex, exactOwners, looksLikeEmail, looksLikePhone, nameFor, normalizePhone, ownersOf, searchPeople } from '../scripts/lib/contacts.mjs';
+import { buildIndex, contactDatabases, exactOwners, looksLikeEmail, looksLikePhone, nameFor, normalizePhone, ownersOf, searchPeople } from '../scripts/lib/contacts.mjs';
 import { CONTACT_ROWS } from './fixtures.mjs';
 
 const index = buildIndex(CONTACT_ROWS);
@@ -68,4 +71,15 @@ test('exact owners need the whole number or email, and carry the organization', 
   assert.deepEqual(exactOwners(idx, '+995550100008'), []);
   assert.deepEqual(exactOwners(idx, '0001'), []);
   assert.deepEqual(exactOwners(null, '+15550100007'), []);
+});
+
+test("BEEPER_ASSISTANT_ADDRESSBOOK points the lookup at another AddressBook folder, so a test never opens the Mac's own", t => {
+  const root = mkdtempSync(join(tmpdir(), 'ba-addressbook-'));
+  const prior = process.env.BEEPER_ASSISTANT_ADDRESSBOOK;
+  t.after(() => { if (prior === undefined) delete process.env.BEEPER_ASSISTANT_ADDRESSBOOK; else process.env.BEEPER_ASSISTANT_ADDRESSBOOK = prior; rmSync(root, { recursive: true, force: true }); });
+  process.env.BEEPER_ASSISTANT_ADDRESSBOOK = root;
+  assert.deepEqual(contactDatabases(), [], 'an empty folder has none');
+  mkdirSync(join(root, 'Sources', 'invented'), { recursive: true });
+  for (const file of [join(root, 'AddressBook-v22.abcddb'), join(root, 'Sources', 'invented', 'AddressBook-v22.abcddb')]) writeFileSync(file, '');
+  assert.deepEqual(contactDatabases(), [join(root, 'AddressBook-v22.abcddb'), join(root, 'Sources', 'invented', 'AddressBook-v22.abcddb')]);
 });

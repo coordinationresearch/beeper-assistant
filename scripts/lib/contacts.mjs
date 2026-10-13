@@ -15,7 +15,9 @@ select r.Z_PK, r.ZFIRSTNAME, r.ZLASTNAME, r.ZNICKNAME, r.ZORGANIZATION, e.ZADDRE
   from ZABCDEMAILADDRESS e join ZABCDRECORD r on r.Z_PK = e.ZOWNER
  where e.ZADDRESS is not null;`;
 
-export function contactDatabases(root = join(homedir(), 'Library', 'Application Support', 'AddressBook')) {
+// BEEPER_ASSISTANT_ADDRESSBOOK names another AddressBook folder, as the Corpus and history
+// variables name other databases, so a test never opens the Mac's own Contacts.
+export function contactDatabases(root = process.env.BEEPER_ASSISTANT_ADDRESSBOOK || join(homedir(), 'Library', 'Application Support', 'AddressBook')) {
   const out = [];
   const name = 'AddressBook-v22.abcddb';
   try {

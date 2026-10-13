@@ -5,7 +5,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { HistoryError, appleDate, aroundInBeeper, aroundInMessages, beeperRowToMessage, chatStats, textFromAttributedBody } from '../scripts/lib/history.mjs';
+import { HistoryError, appleDate, aroundInBeeper, aroundInMessages, beeperRowToMessage, chatStats, iMessageGroupMembers, textFromAttributedBody } from '../scripts/lib/history.mjs';
 import { renderChat } from '../scripts/lib/render.mjs';
 import { messageAlias } from '../scripts/lib/state.mjs';
 import { buildIndex } from '../scripts/lib/contacts.mjs';
@@ -187,4 +187,19 @@ test('a file that cannot be read leaves its Chats without counts and says why', 
   assert.equal(stats.has(ROOM), false);
   assert.equal(stats.has('imsg##thread:test'), true);
   assert.match(problems.join(' '), /Beeper's history file is not on this Mac/);
+});
+
+test('every iMessage group comes back as its members, and one-to-one chats are left out', async () => {
+  const file = makeDB('groups.db', `
+    create table chat (ROWID integer primary key, style integer, guid text);
+    create table handle (ROWID integer primary key, id text);
+    create table chat_handle_join (chat_id integer, handle_id integer);
+    insert into handle values (1, '+15550100001'), (2, '+15550100002'), (3, 'invented@example.com');
+    insert into chat values (10, 43, 'g-old'), (11, 45, 'one-to-one'), (12, 43, 'g-three');
+    insert into chat_handle_join values (10, 1), (10, 2), (11, 1), (12, 1), (12, 2), (12, 3);`);
+  const groups = (await iMessageGroupMembers({ file })).map((g) => [...g].sort());
+  assert.deepEqual(groups.sort(), [['+15550100001', '+15550100002'], ['+15550100001', '+15550100002', 'invented@example.com']]);
+  const changed = makeDB('groups-changed.db', 'create table chat (ROWID integer primary key); create table handle (ROWID integer primary key, id text); create table chat_handle_join (chat_id integer, handle_id integer);');
+  await assert.rejects(iMessageGroupMembers({ file: changed }), (e) => e instanceof HistoryError && /chat has no style/.test(e.message));
+  await assert.rejects(iMessageGroupMembers({ file: join(dir, 'absent.db') }), HistoryError);
 });

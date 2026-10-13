@@ -323,6 +323,7 @@ export function applyContext(row, messages, { now = Date.now(), shown = 4 } = {}
   const before = real[real.length - burst.length - 1];
   const hidden = (k, v) => Object.defineProperty(row, k, { value: v, enumerable: false, writable: true, configurable: true });
   hidden('texts', burst.slice(-6).map((m) => htmlToText(m.text)));
+  if (burst.some(m => m.mediaContext)) hidden('mediaContext', burst.slice(-6).map(m => m.mediaContext || ''));
   hidden('ownerBefore', before && before.isSender ? { id: before.id, text: htmlToText(before.text) } : null);
   row.runIDs = burst.map((m) => m.id);
   // How long the Owner has left them, from the first message not yet answered.
@@ -389,11 +390,51 @@ export function finalizeTriage(t, opts = {}) {
   return capTriage(sortByState(filterTriage(t)), opts);
 }
 
+// A group read stays on the list when it Addressed the Owner and their Burst is last (ADR 0145): the
+// Owner may have read it on another device and still owe the answer.
+const addressedLast = (read) => Boolean(read && read.lastFrom === 'them' && read.addressed);
+
+// The groups whose messages are read before the list is built: every one it could keep. An unread
+// group, or one that holds a Dropped item, stays whatever its messages say. A read one stays only
+// when it Addressed the Owner with their Burst last, which only its messages tell, so one whose
+// newest item is the Owner's own Message isn't read. A Reaction or a notice of the Owner's, such as
+// renaming the group, is no Message, so their question before it may still be unanswered. The same
+// filters as buildTriage's, Dismissed included.
+export function groupCandidates(chats, { now = Date.now(), windowDays = DEFAULT_WINDOW_DAYS, state = null, held = null } = {}) {
+  const cutoff = now - windowDays * DAY;
+  return chats.filter((c) => {
+    if (!isGroup(c) || c.isArchived || c.isMuted || c.isLowPriority || isBotChat(c) || c.isReadOnly) return false;
+    const h = held ? held.get(c.id) : undefined;
+    if (!h && (Date.parse(c.lastActivity) || 0) < cutoff) return false;
+    if (state && isDismissed(state, c)) return false;
+    return isUnread(c) || Boolean(h) || !(c.preview && c.preview.isSender === true && isMessage(c.preview));
+  });
+}
+
+// Whether a Dismiss still holds by the Chat's messages, oldest first: the item dismissed is among
+// them and no Message came after it (CONTEXT.md, Dismissed, holds until a new message arrives). A
+// Reaction or a notice after it, such as someone's tapback on the question dismissed, ends nothing.
+// isDismissed reads only the preview, which such an item replaces.
+export function dismissalHolds(state, chat, messages) {
+  const d = state && state.dismissed && state.dismissed[chat.id];
+  if (!d || d.messageID == null) return false;
+  const at = messages.findIndex((m) => String(m && m.id) === String(d.messageID));
+  return at >= 0 && !messages.slice(at + 1).some(isMessage);
+}
+// Whether a Chat's preview is a Message rather than a Reaction or a notice, for keeping a group's
+// Dismiss past items that don't end it (state.mjs pruneDismissed).
+export const isMessagePreview = (pv) => Boolean(pv) && isMessage(pv);
+
 // held: Chats the caller says hold a Dropped item (ADR 0081), as a Map from Chat id to
 // { kind, why, at }. Such a Chat stays whoever spoke last and however long ago, and the row
 // carries it as `held`, kept out of JSON. What the Owner said about the Chat still counts:
 // archived, muted, low priority, or Dismissed leaves it out. `ba triage` passes none.
-export function buildTriage(chats, { now = Date.now(), windowDays = DEFAULT_WINDOW_DAYS, state = null, contacts = null, maxPeople = 100, maxGroups = 10, includeAutomated = false, finalize = true, held = null } = {}) {
+// groupReads: what each group's own messages say (addressed.mjs groupRead), as a Map from Chat id,
+// for the groups the caller read (groupCandidates). A read group stays only when one says it
+// Addressed the Owner with their Burst last. A Dismissed group stays off until its next Message:
+// dismissedGroups names the groups whose messages show their Dismiss still holds (dismissalHolds),
+// though a Reaction or a notice since changed their preview.
+export function buildTriage(chats, { now = Date.now(), windowDays = DEFAULT_WINDOW_DAYS, state = null, contacts = null, maxPeople = 100, maxGroups = 10, includeAutomated = false, finalize = true, held = null, groupReads = null, dismissedGroups = null } = {}) {
   const cutoff = now - windowDays * DAY;
   const stats = { scanned: chats.length, filtered: 0, olderUnread: 0, bots: 0, readOnly: 0, self: 0, automated: 0, dismissed: 0, waitingOnThem: 0, nothingOwed: 0, stale: 0, quietGroups: 0, morePeople: 0, moreGroups: 0, unresolvedNames: 0 };
   if (held && held.size) stats.held = 0;
@@ -418,7 +459,9 @@ export function buildTriage(chats, { now = Date.now(), windowDays = DEFAULT_WIND
     if (isBotChat(c)) { stats.bots++; continue; }
     if (c.isReadOnly) { stats.readOnly++; continue; }
     if (isGroup(c)) {
-      if (unread || h) groups.push(h ? hold(toRow(c, { now, contacts }), h, old || !unread) : toRow(c, { now, contacts })); else stats.quietGroups++;
+      if ((state && isDismissed(state, c)) || (dismissedGroups && dismissedGroups.has(c.id))) { stats.dismissed++; continue; }
+      const kept = unread || addressedLast(groupReads ? groupReads.get(c.id) : undefined);
+      if (kept || h) groups.push(h ? hold(toRow(c, { now, contacts }), h, old || !kept) : toRow(c, { now, contacts })); else stats.quietGroups++;
       continue;
     }
     if (isSelfChat(c, self, names)) { stats.self++; continue; }

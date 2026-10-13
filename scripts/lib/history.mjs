@@ -319,6 +319,21 @@ from ${from} where ${real} group by j.chat_id`),
   return out;
 }
 
+// Every iMessage group on this Mac, as each one's handles with the Owner left out. A create that sends
+// into a group lands in any older group with exactly those people, however far back, so `ba group`
+// checks all of them here, not only the newest chats Beeper lists.
+export async function iMessageGroupMembers({ file = messagesDB() } = {}) {
+  await open(file, 'The Messages database', 'The app your agent runs in needs Full Disk Access, in System Settings, Privacy & Security.');
+  await needColumns(file, 'chat', ['ROWID', 'style'], 'The Messages database');
+  await needColumns(file, 'chat_handle_join', ['chat_id', 'handle_id'], 'The Messages database');
+  await needColumns(file, 'handle', ['ROWID', 'id'], 'The Messages database');
+  // Style 43 is a group, 45 a one-to-one chat.
+  const rows = await query(file, 'select j.chat_id c, h.id h from chat c join chat_handle_join j on j.chat_id = c.ROWID join handle h on h.ROWID = j.handle_id where c.style = 43');
+  const groups = new Map();
+  for (const r of rows) { const k = Number(r.c); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(String(r.h)); }
+  return [...groups.values()];
+}
+
 // Each chat: { id, messageIDs: [ids of messages it showed] }.
 // Returns the counts found, and one line per file that could not be read.
 export async function chatStats(chats, { now = Date.now(), beeperFile = beeperDB(), messagesFile = messagesDB() } = {}) {
