@@ -1,3 +1,4 @@
+import { preparedActionBody, actionID } from './prepared-action.mjs';
 // The Owner's actions as `ba app` commands (ADR 0185): one entry per action, held once for the skill
 // and the app. ba.mjs reads each entry's modes before anything connects; the app's CLI (app-cli.ts)
 // reads its callers, its lateness, and its check of the request body. The words after `ba app` are
@@ -28,8 +29,251 @@ const none = (rest) => { if (rest.length) throw new Error('usage'); return {}; }
 const empty = (body) => keys(body, []);
 const oneChat = (rest) => { if (rest.length !== 1 || !exactChatID(rest[0])) throw new Error('usage'); return { chatID: rest[0] }; };
 const chatBody = (body) => keys(body, ['chatID']) && exactChatID(body.chatID);
+// An Intro's ID, as `ba group` and `ba app intros` print it (lib/app.mjs INTRO_ID).
+const INTRO_ID = /^i[0-9a-f]{8}$/;
+const choiceID = (value) => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(value);
 
+const contactField = (value, max) => value === undefined || (typeof value === 'string' && value.length <= max && !/[\x00-\x1f\x7f]/.test(value));
+const namePart = value => typeof value === 'string' && value.length <= 100 && !/[\x00-\x1f\x7f]/.test(value);
+const menuText = (value, multiple) => {
+  const messages = typeof value === 'string' ? [value] : multiple && Array.isArray(value) ? value : [];
+  return messages.length > 0 && messages.length <= 10 && messages.every(text => typeof text === 'string' && text.trim() && !text.includes('\0'))
+    && messages.reduce((sum, text) => sum + text.length, 0) <= 10_000;
+};
+// A Person's ID, as ba who and ba people print it, and the ids `person file` gives a File's lines,
+// Open loops, and an Undo. Instructions and Notes by the IDs ba app chat and ba notes print.
+const personID = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value);
+const LINE_ID = /^f[1-9]\d{0,15}$/, LOOP_ID = /^l_[0-9a-f]{12}$/, UNDO_ID = /^u[0-9a-f]{16}$/;
+const PARTS = ['who', 'now', 'you', 'talk', 'history', 'others'];
+const shownText = value => typeof value === 'string' && value.length <= 4000 && !value.includes('\0');
+const lineText = value => typeof value === 'string' && Boolean(value.trim()) && value.length <= 500 && !value.includes('\0');
+const WIDER = ['chat', 'person', 'global'];
+const instructionID = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
+const noteID = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value);
+const personBody = b => keys(b, ['personID']) && personID(b.personID);
+const incidentID = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
+const incidentSelection = value => {
+  if (!keys(value, ['window', 'runIds', 'categories']) || !keys(value.categories, ['prompts', 'outputs', 'feedback', 'tools'])
+    || !Object.values(value.categories).every(v => typeof v === 'boolean') || !Array.isArray(value.runIds) || value.runIds.length > 10
+    || !value.runIds.every(id => typeof id === 'string' && id.length > 0 && id.length <= 128 && !/[\x00-\x1f]/.test(id)) || new Set(value.runIds).size !== value.runIds.length
+    || (Object.values(value.categories).some(Boolean) && !value.runIds.length)) return false;
+  if (value.window === null) return true;
+  const instant = v => typeof v === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(v) && Number.isFinite(Date.parse(v));
+  return keys(value.window, ['since', 'until']) && instant(value.window.since) && instant(value.window.until)
+    && Date.parse(value.window.until) > Date.parse(value.window.since) && Date.parse(value.window.until) - Date.parse(value.window.since) <= 7 * 86400000;
+};
 export const ACTIONS = [
+  { name: 'detail list', route: '/detail/list', usage: 'ba app detail list <chatID>', modes: both(ALL), callers: OWNER, late: false, read: true, parse: oneChat, check: chatBody, chats: body => [body.chatID] },
+  ...['use', 'dismiss', 'source'].map(action => ({ name: `detail ${action}`, route: `/detail/${action}`,
+    usage: `ba app detail ${action} <chatID> <id>`, modes: both(action === 'source' ? ALL : NOT_READONLY), callers: OWNER, late: false,
+    parse: rest => { if (rest.length !== 2 || !exactChatID(rest[0]) || !/^[a-f0-9]{24}$/.test(rest[1])) throw Error('usage'); return { chatID: rest[0], id: rest[1] }; },
+    check: body => keys(body, ['chatID', 'id']) && exactChatID(body.chatID) && typeof body.id === 'string' && /^[a-f0-9]{24}$/.test(body.id), chats: body => [body.chatID] })),
+  { name: 'draft saved', route: '/draft/saved', usage: 'ba app draft saved <chatID>', modes: both(ALL), callers: OWNER, late: false, read: true,
+    parse: oneChat, check: chatBody, chats: b => [b.chatID] },
+  { name: 'draft restore', route: '/draft/restore', usage: 'ba app draft restore <chatID> <backupID>', modes: both(NOT_READONLY), callers: OWNER, late: false,
+    parse: rest => { if (rest.length !== 2 || !exactChatID(rest[0]) || !/^[1-9]\d*$/.test(rest[1])) throw Error('usage'); return { chatID: rest[0], id: Number(rest[1]) }; },
+    check: b => keys(b, ['chatID', 'id']) && exactChatID(b.chatID) && Number.isSafeInteger(b.id) && b.id > 0, chats: b => [b.chatID] },
+  { name: 'menu choose', route: '/menu/choose', usage: 'ba app menu choose <rowID> <version> <text>', modes: both(NOT_READONLY), callers: ['terminal'], late: false,
+    parse: rest => { if (rest.length !== 3) throw Error('usage'); return { rowID: rest[0], version: rest[1], text: rest[2] }; },
+    check: b => keys(b, ['rowID', 'version', 'text']) && typeof b.rowID === 'string' && /^[a-f0-9]{16}$/.test(b.rowID)
+      && typeof b.version === 'string' && /^[a-f0-9]{16}$/.test(b.version) && menuText(b.text, false), chats: () => [] },
+  { name: 'work list', route: '/work/list', usage: 'ba app work list <chatID>', modes: both(ALL), callers: [...OWNER, 'app'], late: true, read: true,
+    parse: oneChat, check: chatBody, chats: b => [b.chatID] },
+  ...['publish', 'edit', 'draft'].map(operation => ({ name: `work ${operation}`, route: `/work/${operation}`, usage: `ba app work ${operation} '<JSON>'`,
+    modes: both(operation === 'publish' ? ALL : NOT_READONLY), callers: operation === 'publish' ? [...OWNER, 'app'] : OWNER, late: operation === 'publish',
+    parse: rest => { if (rest.length !== 1) throw Error('usage'); const body = JSON.parse(rest[0]); if (!body || typeof body !== 'object' || !exactChatID(body.chatID)) throw Error('usage'); return body; },
+    check: b => Boolean(b) && typeof b === 'object' && !Array.isArray(b) && exactChatID(b.chatID), chats: b => [b.chatID] })),
+  ...['adjust', 'dismiss', 'expand'].map(operation => ({ name: `work ${operation}`, route: `/work/${operation}`,
+    usage: `ba app work ${operation} <chatID> <workID> ${operation === 'expand' ? '<open|close>' : '<revision>'}${operation === 'adjust' ? ' <instruction>' : ''}`,
+    modes: both(NOT_READONLY), callers: OWNER, late: false,
+    parse: rest => {
+      if (rest.length !== (operation === 'adjust' ? 4 : 3) || !exactChatID(rest[0]) || !/^w[0-9a-f]{16}$/.test(rest[1])) throw Error('usage');
+      if (operation === 'expand') { if (!['open', 'close'].includes(rest[2])) throw Error('usage'); return { chatID: rest[0], id: rest[1], open: rest[2] === 'open' }; }
+      if (!/^[1-9]\d*$/.test(rest[2]) || !Number.isSafeInteger(Number(rest[2]))) throw Error('usage');
+      return { chatID: rest[0], id: rest[1], revision: Number(rest[2]), ...(operation === 'adjust' ? { instruction: rest[3] } : {}) };
+    },
+    check: b => keys(b, operation === 'expand' ? ['chatID', 'id', 'open'] : operation === 'adjust' ? ['chatID', 'id', 'revision', 'instruction'] : ['chatID', 'id', 'revision'])
+      && exactChatID(b.chatID) && typeof b.id === 'string' && /^w[0-9a-f]{16}$/.test(b.id)
+      && (operation === 'expand' ? typeof b.open === 'boolean' : Number.isSafeInteger(b.revision) && b.revision > 0)
+      && (operation !== 'adjust' || typeof b.instruction === 'string' && b.instruction.trim().length > 0 && b.instruction.length <= 2000), chats: b => [b.chatID] })),
+
+  { name: 'ask files', route: '/ask/files', usage: `ba app ask files <chatID> '<JSON request>'`, modes: both(NOT_READONLY), callers: OWNER, late: false,
+    parse: rest => { if (rest.length !== 2) throw Error('usage'); return { chatID: rest[0], request: JSON.parse(rest[1]) }; },
+    check: b => keys(b, ['chatID', 'request']) && (exactChatID(b.chatID) || b.chatID === 'no-chat') && b.request && ['add', 'remove'].includes(b.request.operation), chats: b => exactChatID(b.chatID) ? [b.chatID] : [] },
+  { name: 'action prepare', route: '/action/prepare', usage: "ba app action prepare '<JSON specification>'", modes: both(ALL), callers: [...OWNER, 'app'], late: true,
+    parse: rest => { if (rest.length !== 1) throw Error('usage'); const body = preparedActionBody(JSON.parse(rest[0])); if (!body) throw Error('usage'); return body; },
+    check: body => Boolean(preparedActionBody(body)), chats: body => [body.chatID] },
+  { name: 'actions', route: '/actions', usage: 'ba app actions <chatID>', modes: both(ALL), callers: [...OWNER, 'app'], late: true, read: true,
+    parse: oneChat, check: chatBody, chats: body => [body.chatID] },
+  ...['make', 'pass'].map(operation => ({ name: `action ${operation}`, route: `/action/${operation}`, usage: `ba app action ${operation} <chatID> <actionID> --confirmed`,
+    modes: both(NOT_READONLY), callers: OWNER, late: operation === 'pass',
+    parse: rest => { if (rest.length !== 3 || !exactChatID(rest[0]) || !actionID(rest[1]) || rest[2] !== '--confirmed') throw Error('usage'); return { chatID: rest[0], id: rest[1], confirmed: true }; },
+    check: body => keys(body, ['chatID', 'id', 'confirmed']) && exactChatID(body.chatID) && actionID(body.id) && body.confirmed === true,
+    chats: body => [body.chatID] })),
+  { name: 'action finish', route: '/action/finish', usage: 'ba app action finish <chatID> <actionID> <made|not-made|uncertain> <receipt>', modes: both(NOT_READONLY), callers: ['ask'], late: false,
+    parse: rest => { if (rest.length !== 4 || !exactChatID(rest[0]) || !actionID(rest[1]) || !['made', 'not-made', 'uncertain'].includes(rest[2]) || !rest[3].trim() || rest[3].length > 2000) throw Error('usage'); return { chatID: rest[0], id: rest[1], state: rest[2], receipt: rest[3] }; },
+    check: body => keys(body, ['chatID', 'id', 'state', 'receipt']) && exactChatID(body.chatID) && actionID(body.id) && ['made', 'not-made', 'uncertain'].includes(body.state) && typeof body.receipt === 'string' && Boolean(body.receipt.trim()) && body.receipt.length <= 2000,
+    chats: body => [body.chatID] },
+  { name: 'action resolve', route: '/action/resolve', usage: 'ba app action resolve <chatID> <actionID> <made|not-made> --confirmed', modes: both(NOT_READONLY), callers: OWNER, late: false,
+    parse: rest => { if (rest.length !== 4 || !exactChatID(rest[0]) || !actionID(rest[1]) || !['made', 'not-made'].includes(rest[2]) || rest[3] !== '--confirmed') throw Error('usage'); return { chatID: rest[0], id: rest[1], made: rest[2] === 'made', confirmed: true }; },
+    check: body => keys(body, ['chatID', 'id', 'made', 'confirmed']) && exactChatID(body.chatID) && actionID(body.id) && typeof body.made === 'boolean' && body.confirmed === true,
+    chats: body => [body.chatID] },
+  // Not now on an Intro card (the sidebar, ADR 0096): the card goes, and nothing is made. Its Send is
+  // `ba app intro make`, outside this table. Passing only stops, so a late run may.
+  { name: 'intro pass', route: '/intro/pass', usage: 'ba app intro pass <introID> --confirmed', modes: both(NOT_READONLY), callers: OWNER, late: true,
+    parse: rest => { if (rest.length !== 2 || !INTRO_ID.test(rest[0]) || rest[1] !== '--confirmed') throw Error('usage'); return { id: rest[0], confirmed: true }; },
+    check: body => keys(body, ['id', 'confirmed']) && typeof body.id === 'string' && INTRO_ID.test(body.id) && body.confirmed === true,
+    chats: () => [] },
+  { name: 'menu photo', route: '/menu/photo', usage: 'ba app menu photo <rowID> <messageID> <index> | close', modes: both(ALL), callers: ['terminal'], late: false,
+    parse: rest => {
+      if (rest.length === 1 && rest[0] === 'close') return { rowID: null };
+      if (rest.length !== 3 || !/^[a-f0-9]{16}$/.test(rest[0]) || !rest[1] || rest[1].length > 200 || !/^\d{1,2}$/.test(rest[2])) throw Error('usage');
+      return { rowID: rest[0], messageID: rest[1], index: Number(rest[2]) };
+    },
+    check: b => keys(b, ['rowID']) && b.rowID === null || keys(b, ['rowID', 'messageID', 'index']) && typeof b.rowID === 'string' && /^[a-f0-9]{16}$/.test(b.rowID)
+      && typeof b.messageID === 'string' && b.messageID.length > 0 && b.messageID.length <= 200 && Number.isInteger(b.index) && b.index >= 0 && b.index < 100,
+    chats: () => [] },
+  { name: 'menu view', route: '/menu/view', usage: 'ba app menu view', modes: both(ALL), callers: ['terminal'], late: false, read: true,
+    parse: none, check: empty, chats: () => [] },
+  { name: 'menu stop', route: '/menu/stop', usage: 'ba app menu stop <rowID>', modes: both(ALL), callers: ['terminal'], late: true,
+    parse: rest => { if (rest.length !== 1 || !/^[a-f0-9]{16}$/.test(rest[0])) throw Error('usage'); return { rowID: rest[0] }; },
+    check: b => keys(b, ['rowID']) && typeof b.rowID === 'string' && /^[a-f0-9]{16}$/.test(b.rowID), chats: () => [] },
+  ...['mark read', 'dismiss'].map(kind => ({ name: `menu ${kind}`, route: `/menu/${kind.replace(' ', '-')}`,
+    usage: `ba app menu ${kind} <rowID> <version>`, modes: both(FULL), callers: ['terminal'], late: false,
+    parse: rest => {
+      if (rest.length !== 2 || !rest.every(value => /^[a-f0-9]{16}$/.test(value))) throw Error('usage');
+      return { rowID: rest[0], version: rest[1] };
+    },
+    check: b => keys(b, ['rowID', 'version']) && [b.rowID, b.version].every(value => typeof value === 'string' && /^[a-f0-9]{16}$/.test(value)),
+    chats: () => [],
+  })),
+  ...['reply', 'react'].map(kind => ({ name: `menu ${kind}`, route: `/menu/${kind}`,
+    usage: `ba app menu ${kind} <rowID> <version> ${kind === 'reply' ? '<text> [text ...]' : '<token>'} --confirmed`,
+    modes: both(FULL), callers: ['terminal'], late: false,
+    parse: rest => {
+      if (rest.length < 4 || rest.at(-1) !== '--confirmed' || !/^[a-f0-9]{16}$/.test(rest[0]) || !/^[a-f0-9]{16}$/.test(rest[1])) throw Error('usage');
+      const messages = rest.slice(2, -1), arg = messages.length === 1 ? messages[0] : messages;
+      if (!menuText(arg, kind === 'reply')) throw Error('usage');
+      return { rowID: rest[0], version: rest[1], arg, confirmed: true };
+    },
+    check: b => keys(b, ['rowID', 'version', 'arg', 'confirmed']) && typeof b.rowID === 'string' && /^[a-f0-9]{16}$/.test(b.rowID)
+      && typeof b.version === 'string' && /^[a-f0-9]{16}$/.test(b.version) && menuText(b.arg, kind === 'reply') && b.confirmed === true,
+    chats: () => [],
+  })),
+  { name: 'contact name', route: '/contact/name', usage: 'ba app contact name <chatID>', timeoutMs: 120_000, modes: both(ALL), callers: OWNER, late: false, read: true,
+    parse: oneChat, check: chatBody, chats: b => [b.chatID] },
+  { name: 'contact rename', route: '/contact/rename', usage: 'ba app contact rename <chatID> <editID> --first <name> --last <name> [--phone <number>] [--email <address>] --confirmed', modes: both(FULL), callers: OWNER, late: false, timeoutMs: 120_000,
+    parse: rest => {
+      if (rest.length < 7 || !exactChatID(rest[0]) || !choiceID(rest[1]) || rest[2] !== '--first' || rest[4] !== '--last' || rest.at(-1) !== '--confirmed'
+        || !namePart(rest[3]) || !namePart(rest[5]) || !(rest[3] + rest[5]).trim()) throw Error('usage');
+      const fields = {};
+      for (let i = 6; i < rest.length - 1; i += 2) {
+        const key = rest[i] === '--phone' ? 'phone' : rest[i] === '--email' ? 'email' : null;
+        if (!key || key in fields || i + 1 >= rest.length - 1 || !contactField(rest[i + 1], key === 'phone' ? 100 : 254)) throw Error('usage');
+        fields[key] = rest[i + 1];
+      }
+      return { chatID: rest[0], editID: rest[1], first: rest[3], last: rest[5], ...fields, confirmed: true };
+    },
+    check: b => keys(b, ['chatID', 'editID', 'first', 'last', 'confirmed'], ['phone', 'email']) && exactChatID(b.chatID) && choiceID(b.editID)
+      && namePart(b.first) && namePart(b.last) && Boolean((b.first + b.last).trim()) && b.confirmed === true
+      && contactField(b.phone, 100) && contactField(b.email, 254),
+    chats: b => [b.chatID] },
+  { name: 'contact matches', route: '/contact/matches', usage: 'ba app contact matches <chatID> [--search <name>]', modes: both(ALL), callers: OWNER, late: false, read: true,
+    parse: (rest) => {
+      if (!exactChatID(rest[0]) || !(rest.length === 1 || (rest.length === 3 && rest[1] === '--search' && rest[2].length <= 100))) throw new Error('usage');
+      return { chatID: rest[0], search: rest[2] ?? '' };
+    },
+    check: (b) => keys(b, ['chatID', 'search']) && exactChatID(b.chatID) && typeof b.search === 'string' && b.search.length <= 100,
+    chats: b => [b.chatID] },
+  { name: 'contact link', route: '/contact/link', usage: 'ba app contact link <chatID> <choiceID> --confirmed', modes: both(FULL), callers: OWNER, late: false, timeoutMs: 120_000,
+    parse: (rest) => {
+      if (rest.length !== 3 || !exactChatID(rest[0]) || !choiceID(rest[1]) || rest[2] !== '--confirmed') throw new Error('usage');
+      return { chatID: rest[0], choiceID: rest[1], confirmed: true };
+    },
+    check: (b) => keys(b, ['chatID', 'choiceID', 'confirmed']) && exactChatID(b.chatID) && choiceID(b.choiceID) && b.confirmed === true,
+    chats: b => [b.chatID] },
+  // A card Companion saved on its own from a number handoff (ADR 0251): read it, undo it (delete the
+  // card it made), or keep it (hide the sidebar's card). The number for Undo and Keep is the card's
+  // id from contact saved.
+  { name: 'contact saved', route: '/contact/saved', usage: 'ba app contact saved <chatID>', modes: both(ALL), callers: OWNER, late: false, read: true,
+    parse: oneChat, check: chatBody, chats: b => [b.chatID] },
+  { name: 'contact undo', route: '/contact/undo', usage: 'ba app contact undo <chatID> <id> --confirmed', modes: both(FULL), callers: OWNER, late: false, timeoutMs: 120_000,
+    parse: (rest) => {
+      if (rest.length !== 3 || !exactChatID(rest[0]) || !sendID(rest[1]) || rest[2] !== '--confirmed') throw new Error('usage');
+      return { chatID: rest[0], id: Number(rest[1]), confirmed: true };
+    },
+    check: (b) => keys(b, ['chatID', 'id', 'confirmed']) && exactChatID(b.chatID) && Number.isSafeInteger(b.id) && b.id > 0 && b.confirmed === true,
+    chats: b => [b.chatID] },
+  { name: 'contact keep', route: '/contact/keep', usage: 'ba app contact keep <chatID> <id>', modes: both(NOT_READONLY), callers: OWNER, late: false,
+    parse: (rest) => {
+      if (rest.length !== 2 || !exactChatID(rest[0]) || !sendID(rest[1])) throw new Error('usage');
+      return { chatID: rest[0], id: Number(rest[1]) };
+    },
+    check: (b) => keys(b, ['chatID', 'id']) && exactChatID(b.chatID) && Number.isSafeInteger(b.id) && b.id > 0,
+    chats: b => [b.chatID] },
+  // A Person's File as their page shows it (ADR 0267): each line and Open loop with the id the
+  // commands below take, and whether Write it now is offered. It only reads.
+  { name: 'person file', route: '/person/file', usage: 'ba app person file <personID>', modes: both(ALL), callers: OWNER, late: true, read: true,
+    parse: rest => { if (rest.length !== 1 || !personID(rest[0])) throw Error('usage'); return { personID: rest[0] }; }, check: personBody, chats: () => [] },
+  // The Owner's corrections, as his page makes them: an edited line becomes his, word for word, and a
+  // removed one comes back only when a newer message says it again. They write his own words, so
+  // the app takes them from a terminal, on his word, never from a Companion run; an Ask keeps
+  // remember and forget, which check his words in the Ask. A terminal agent can edit the Markdown
+  // file as well, so this adds a record, not a lock. shownText: the line as person file printed it,
+  // so a line changed since is refused.
+  { name: 'person line edit', route: '/person/line/edit', usage: 'ba app person line edit <personID> <lineID> <shownText> <newText> --confirmed', modes: both(FULL), callers: ['terminal'], late: false,
+    parse: rest => {
+      if (rest.length !== 5 || !personID(rest[0]) || !LINE_ID.test(rest[1]) || !shownText(rest[2]) || !lineText(rest[3]) || rest[4] !== '--confirmed') throw Error('usage');
+      return { personID: rest[0], lineID: rest[1], shown: rest[2], text: rest[3], confirmed: true };
+    },
+    check: b => keys(b, ['personID', 'lineID', 'shown', 'text', 'confirmed']) && personID(b.personID) && typeof b.lineID === 'string' && LINE_ID.test(b.lineID)
+      && shownText(b.shown) && lineText(b.text) && b.confirmed === true, chats: () => [] },
+  { name: 'person line remove', route: '/person/line/remove', usage: 'ba app person line remove <personID> <lineID> <shownText> --confirmed', modes: both(FULL), callers: ['terminal'], late: false,
+    parse: rest => {
+      if (rest.length !== 4 || !personID(rest[0]) || !LINE_ID.test(rest[1]) || !shownText(rest[2]) || rest[3] !== '--confirmed') throw Error('usage');
+      return { personID: rest[0], lineID: rest[1], shown: rest[2], confirmed: true };
+    },
+    check: b => keys(b, ['personID', 'lineID', 'shown', 'confirmed']) && personID(b.personID) && typeof b.lineID === 'string' && LINE_ID.test(b.lineID) && shownText(b.shown) && b.confirmed === true,
+    chats: () => [] },
+  { name: 'person line add', route: '/person/line/add', usage: 'ba app person line add <personID> <who|now|you|talk|history|others> <text> --confirmed', modes: both(FULL), callers: ['terminal'], late: false,
+    parse: rest => {
+      if (rest.length !== 4 || !personID(rest[0]) || !PARTS.includes(rest[1]) || !lineText(rest[2]) || rest[3] !== '--confirmed') throw Error('usage');
+      return { personID: rest[0], part: rest[1], text: rest[2], confirmed: true };
+    },
+    check: b => keys(b, ['personID', 'part', 'text', 'confirmed']) && personID(b.personID) && PARTS.includes(b.part) && lineText(b.text) && b.confirmed === true, chats: () => [] },
+  // Takes back one correction by the undo id its answer gave, for ten minutes and while nothing has changed those lines.
+  { name: 'person line undo', route: '/person/line/undo', usage: 'ba app person line undo <personID> <undoID>', modes: both(FULL), callers: ['terminal'], late: false,
+    parse: rest => { if (rest.length !== 2 || !personID(rest[0]) || !UNDO_ID.test(rest[1])) throw Error('usage'); return { personID: rest[0], undoID: rest[1] }; },
+    check: b => keys(b, ['personID', 'undoID']) && personID(b.personID) && typeof b.undoID === 'string' && UNDO_ID.test(b.undoID), chats: () => [] },
+  // Marks an Open loop with them done, as the ✕ on a Found item closes one.
+  { name: 'person loop done', route: '/person/loop/done', usage: 'ba app person loop done <personID> <loopID>', modes: both(FULL), callers: OWNER, late: false,
+    parse: rest => { if (rest.length !== 2 || !personID(rest[0]) || !LOOP_ID.test(rest[1])) throw Error('usage'); return { personID: rest[0], loopID: rest[1] }; },
+    check: b => keys(b, ['personID', 'loopID']) && personID(b.personID) && typeof b.loopID === 'string' && LOOP_ID.test(b.loopID), chats: () => [] },
+  // Write it now: one first build of their File at once, on the Daily budget, for someone the Owner
+  // has written to one-to-one. It writes nothing to Beeper, so a late run may, as with brief, and the
+  // app spends a late run's as background work, which Pause stops.
+  { name: 'person write', route: '/person/write', usage: 'ba app person write <personID>', modes: both(NOT_READONLY), callers: OWNER, late: true, timeoutMs: 10 * 60_000,
+    parse: rest => { if (rest.length !== 1 || !personID(rest[0])) throw Error('usage'); return { personID: rest[0] }; }, check: personBody, chats: () => [] },
+  // A standing instruction by its ID (the sidebar's and a Person page's Undo and Delete). An edit takes
+  // the Owner's own words in the Ask you are in, as ba app instruction does, so only an Ask makes one.
+  { name: 'instruction edit', route: '/instruction/edit', usage: 'ba app instruction edit <instructionID>', modes: both(FULL), callers: ['ask'], late: false,
+    parse: rest => { if (rest.length !== 1 || !instructionID(rest[0])) throw Error('usage'); return { id: rest[0] }; },
+    check: b => keys(b, ['id']) && instructionID(b.id), chats: () => [] },
+  { name: 'instruction undo', route: '/instruction/undo', usage: 'ba app instruction undo <instructionID>', modes: both(FULL), callers: OWNER, late: false,
+    parse: rest => { if (rest.length !== 1 || !instructionID(rest[0])) throw Error('usage'); return { id: rest[0] }; },
+    check: b => keys(b, ['id']) && instructionID(b.id), chats: () => [] },
+  // Use everywhere: the same words saved again for a wider scope, keeping the narrower one. An Ask may
+  // only on the Owner's words there naming that scope, which the app checks (ADR 0077).
+  { name: 'instruction widen', route: '/instruction/widen', usage: 'ba app instruction widen <instructionID> <chat|person|global>', modes: both(FULL), callers: ['ask'], late: false,
+    parse: rest => { if (rest.length !== 2 || !instructionID(rest[0]) || !WIDER.includes(rest[1])) throw Error('usage'); return { id: rest[0], scope: rest[1] }; },
+    check: b => keys(b, ['id', 'scope']) && instructionID(b.id) && WIDER.includes(b.scope), chats: () => [] },
+  { name: 'instruction delete', route: '/instruction/delete', usage: 'ba app instruction delete <instructionID> --confirmed', modes: both(FULL), callers: OWNER, late: false,
+    parse: rest => { if (rest.length !== 2 || !instructionID(rest[0]) || rest[1] !== '--confirmed') throw Error('usage'); return { id: rest[0], confirmed: true }; },
+    check: b => keys(b, ['id', 'confirmed']) && instructionID(b.id) && b.confirmed === true, chats: () => [] },
+  // A Note, as a Person's page deletes one: it leaves a tombstone, so no agent saves it again.
+  { name: 'note delete', route: '/note/delete', usage: 'ba app note delete <chatID> <noteID>', modes: both(FULL), callers: OWNER, late: false,
+    parse: rest => { if (rest.length !== 2 || !exactChatID(rest[0]) || !noteID(rest[1])) throw Error('usage'); return { chatID: rest[0], noteID: rest[1] }; },
+    check: b => keys(b, ['chatID', 'noteID']) && exactChatID(b.chatID) && noteID(b.noteID), chats: b => [b.chatID] },
   // Pause Background Work (the menu bar's right-click menu, Settings): stops what spends tokens on its
   // own. Stopping only stops, so a late run and a drafts-only run may.
   { name: 'pause', route: '/pause', usage: 'ba app pause', modes: both(NOT_READONLY), callers: OWNER, late: true, parse: none, check: empty, chats: () => [] },
@@ -38,7 +282,38 @@ export const ACTIONS = [
   // Check Now (the right-click menu): reads every Chat again for the list, now.
   { name: 'check now', route: '/check-now', usage: 'ba app check now', modes: both(FULL), callers: OWNER, late: false, parse: none, check: empty, chats: () => [] },
   // Keep Drafting Today (the Menu bar panel): Agent Drafts go on past the daily budget until midnight.
+  { name: 'release notes dismiss', route: '/release-notes/dismiss', usage: 'ba app release notes dismiss', modes: both(FULL), callers: OWNER, late: false, parse: none, check: empty, chats: () => [] },
+  // Dismiss on the Menu bar panel's once-only line after Setup about where the sidebar shows.
+  { name: 'sidebar tip dismiss', route: '/sidebar-tip/dismiss', usage: 'ba app sidebar tip dismiss', modes: both(FULL), callers: OWNER, late: false, parse: none, check: empty, chats: () => [] },
   { name: 'keep drafting', route: '/keep-drafting', usage: 'ba app keep drafting', modes: both(FULL), callers: OWNER, late: false, parse: none, check: empty, chats: () => [] },
+  // The × on the first message of the sidebar's placed Reply (ADR 0130): the Reply becomes the Steps
+  // it keeps, and Beeper's box the next message. It writes a Draft only, so a drafts-only run may.
+  { name: 'reply choose', route: '/reply/choose', usage: 'ba app reply choose <chatID> <source> <replyID> <index>', modes: both(NOT_READONLY), callers: OWNER, late: false,
+    parse: rest => {
+      if (rest.length !== 4 || !exactChatID(rest[0]) || !['options', 'draft', 'agent'].includes(rest[1]) || !/^\d+$/.test(rest[3])) throw Error('usage');
+      return { chatID: rest[0], source: rest[1], id: rest[2], index: Number(rest[3]) };
+    },
+    check: b => keys(b, ['chatID', 'source', 'id', 'index']) && exactChatID(b.chatID) && ['options', 'draft', 'agent'].includes(b.source)
+      && typeof b.id === 'string' && b.id.length > 0 && b.id.length <= 2048 && Number.isSafeInteger(b.index) && b.index >= 0,
+    chats: b => [b.chatID] },
+  { name: 'reply edit', route: '/reply/edit', usage: 'ba app reply edit <chatID> <source> <replyID> <index> <step> <shownText> <newText>', modes: both(NOT_READONLY), callers: OWNER, late: false,
+    parse: rest => {
+      if (rest.length !== 7 || !exactChatID(rest[0]) || !['options', 'draft', 'agent'].includes(rest[1]) || !/^\d+$/.test(rest[3]) || !/^\d+$/.test(rest[4])) throw Error('usage');
+      return { chatID: rest[0], source: rest[1], id: rest[2], index: Number(rest[3]), step: Number(rest[4]), before: rest[5], text: rest[6] };
+    },
+    check: b => keys(b, ['chatID', 'source', 'id', 'index', 'step', 'before', 'text']) && exactChatID(b.chatID) && ['options', 'draft', 'agent'].includes(b.source)
+      && typeof b.id === 'string' && b.id.length > 0 && b.id.length <= 2048 && Number.isSafeInteger(b.index) && b.index >= 0 && Number.isSafeInteger(b.step) && b.step >= 0
+      && typeof b.before === 'string' && b.before.length <= 20_000 && typeof b.text === 'string' && b.text.trim().length > 0 && b.text.length <= 20_000 && !b.text.includes('\0'),
+    chats: b => [b.chatID] },
+  { name: 'reply fill', route: '/reply/fill', usage: 'ba app reply fill <chatID> <replyID> <shownText> <answer>', modes: both(NOT_READONLY), callers: OWNER, late: false,
+    parse: rest => {
+      if (rest.length !== 4 || !exactChatID(rest[0])) throw Error('usage');
+      return { chatID: rest[0], id: rest[1], text: rest[2], answer: rest[3] };
+    },
+    check: b => keys(b, ['chatID', 'id', 'text', 'answer']) && exactChatID(b.chatID) && typeof b.id === 'string' && b.id.length > 0 && b.id.length <= 2048
+      && typeof b.text === 'string' && b.text.length <= 20_000 && typeof b.answer === 'string' && b.answer.trim().length > 0 && b.answer.length <= 80,
+    chats: b => [b.chatID] },
+  { name: 'reply leave out first', route: '/reply/leave-out-first', usage: 'ba app reply leave out first <chatID>', modes: both(NOT_READONLY), callers: OWNER, late: false, parse: oneChat, check: chatBody, chats: (b) => [b.chatID] },
   // Stop on a Reply that is sending (the sidebar): its waiting Steps are cancelled. Stopping only stops.
   { name: 'reply stop', route: '/reply/stop', usage: 'ba app reply stop <chatID>', modes: both(NOT_READONLY), callers: OWNER, late: true, parse: oneChat, check: chatBody, chats: (b) => [b.chatID] },
   // Brief now (the sidebar): a Chat's Brief written now, or the saved one when it already read the
@@ -71,6 +346,36 @@ export const ACTIONS = [
       && typeof b.went === 'boolean' && (b.messageID === undefined || messageID(b.messageID)) && (b.confirmed === undefined || b.confirmed === true)
       && (b.messageID !== undefined || b.confirmed === true) && (b.went || (b.confirmed === true && b.messageID === undefined)),
     chats: (b) => [b.chatID] },
+  // Diagnostics reads fixed operational states or performs the Owner's specific reporting choice.
+  // Turning automatic reports off is allowed late; enabling or sending is full mode only.
+  { name: 'diagnostics view', route: '/diagnostics/view', usage: 'ba app diagnostics view', modes: both(ALL), callers: OWNER, late: true, read: true,
+    parse: none, check: empty, chats: () => [] },
+  { name: 'diagnostics send', route: '/diagnostics/send', usage: 'ba app diagnostics send', modes: both(FULL), callers: OWNER, late: false, timeoutMs: 30_000,
+    parse: none, check: empty, chats: () => [] },
+  { name: 'diagnostics off', route: '/diagnostics/off', usage: 'ba app diagnostics off', modes: both(NOT_READONLY), callers: OWNER, late: true,
+    parse: none, check: empty, chats: () => [] },
+  { name: 'diagnostics on', route: '/diagnostics/on', usage: 'ba app diagnostics on', modes: both(FULL), callers: OWNER, late: false,
+    parse: none, check: empty, chats: () => [] },
+  { name: 'incident open', route: '/incident/open', usage: 'ba app incident open', modes: both(ALL), callers: OWNER, late: true,
+    parse: none, check: empty, chats: () => [] },
+  { name: 'incident list', route: '/incident/list', usage: 'ba app incident list', modes: both(ALL), callers: OWNER, late: true, read: true,
+    parse: none, check: empty, chats: () => [] },
+  { name: 'incident preview', route: '/incident/preview', usage: "ba app incident preview '<JSON selection>'", modes: both(FULL), callers: OWNER, late: false,
+    parse: rest => { if (rest.length !== 1) throw Error('usage'); const selection = JSON.parse(rest[0]); if (!incidentSelection(selection)) throw Error('usage'); return { selection }; },
+    check: body => keys(body, ['selection']) && incidentSelection(body.selection), chats: () => [] },
+  ...['view', 'status', 'delete'].map(operation => ({ name: `incident ${operation}`, route: `/incident/${operation}`, usage: `ba app incident ${operation} <bundleID>`,
+    modes: both(operation === 'delete' ? NOT_READONLY : ALL), callers: OWNER, late: operation !== 'delete', read: operation !== 'delete', timeoutMs: 45_000,
+    parse: rest => { if (rest.length !== 1 || !incidentID(rest[0])) throw Error('usage'); return { id: rest[0] }; },
+    check: body => keys(body, ['id']) && incidentID(body.id), chats: () => [] })),
+  { name: 'incident share', route: '/incident/share', usage: 'ba app incident share <bundleID> <previewSHA256>', modes: both(FULL), callers: OWNER, late: false, timeoutMs: 150_000,
+    parse: rest => { if (rest.length !== 2 || !incidentID(rest[0]) || !/^[0-9a-f]{64}$/.test(rest[1])) throw Error('usage'); return { id: rest[0], digest: rest[1] }; },
+    check: body => keys(body, ['id', 'digest']) && incidentID(body.id) && typeof body.digest === 'string' && /^[0-9a-f]{64}$/.test(body.digest), chats: () => [] },
+  { name: 'incident copy', route: '/incident/copy', usage: 'ba app incident copy <bundleID>', modes: both(NOT_READONLY), callers: OWNER, late: false,
+    parse: rest => { if (rest.length !== 1 || !incidentID(rest[0])) throw Error('usage'); return { id: rest[0] }; },
+    check: body => keys(body, ['id']) && incidentID(body.id), chats: () => [] },
+  // Uninstall (Settings → Data): the app asks the Owner on the Mac, as its button does, and only
+  // their click there removes anything. An agent can start it, never finish it.
+  { name: 'uninstall', route: '/uninstall', usage: 'ba app uninstall', modes: both(FULL), callers: OWNER, late: false, parse: none, check: empty, chats: () => [] },
 ];
 
 // The action these words name, longest name first, with the words after it, or null.

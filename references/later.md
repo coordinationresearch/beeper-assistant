@@ -3,7 +3,7 @@
 Beeper Companion keeps two kinds of later work, lists both on its Runs page with Stop, and does each when it comes due:
 
 - **A Timed send** holds words you write now and sends exactly those later: at a time, as a list of texts on a timer, or when the locked Mac unlocks. No run wakes for it. The Companion checks the Chat right before it goes, and anything the Owner sends there first cancels it.
-- **A Look-again** wakes a fresh run of you later, at a time or when someone next writes in a Chat, with a note about what to look at. That run reads the Chat as it stands and decides what to do, writing any words fresh. A repeating Look-again does the same on a schedule, such as every weekday at 8:00, until the Owner stops it.
+- **A Look-again** wakes a fresh run of you later, at a time or when someone next writes in a Chat, with a note about what to look at. That run reads the Chat as it stands and decides what to do, writing any words fresh. A repeating Look-again does the same on a schedule, such as every weekday at 8:00 or every 12 hours, until the Owner stops it.
 
 ## Which one
 
@@ -85,29 +85,25 @@ One Owner request can need several Look-agains, such as "check on both of them t
 
 - **A plain reminder** that needs no work from you, such as "remind me to call the vet at 5", goes in the Mac's Reminders app, with that time as its alert. Reminders reaches the Owner's phone, and they can tick it off. "Remind me to answer Dana if she hasn't written by 6" needs a look at a Chat, so it is a Look-again without `--send`.
 - **Keeping a conversation going for a while**, such as "keep it going with her for 20 minutes" or "answer for me until 11", is Auto with an end time: `ba app auto on <chatID> --for 20m --text-first`, or without `--text-first` when the Owner only asked you to answer. [Auto with an end time](app.md#auto-with-an-end-time) says how. It ends by itself; don't set a Look-again to end it.
-- **What the app can't do yet.** Say so in one line, offer what it can do, and never build it another way:
-  - anything that repeats by the hour or minute, such as "every hour" or "every 30 minutes". Offer a time each day instead.
 
 ## Setting a repeating Look-again
 
 ```
-ba app later <chatID|none> --every <day|weekday|weekend|mon,wed,…> --time <HH:MM> [--send] [--until <time>] --note "<text>" [--confirmed]
+ba app later <chatID|none> --every <12h|30m|day|weekday|weekend|mon,wed,…> [--time <HH:MM>] [--send] [--until <time>] --note "<text>" [--confirmed]
 ```
 
-A repeating Look-again wakes a fresh run on each day it names, at one time of day, until the Owner stops it. Each firing reads the Chat as it stands and writes any words fresh, as a one-off Look-again does.
+A repeating Look-again wakes a fresh run on the calendar days it names at one time of day, or after each elapsed interval, until the Owner stops it. Each firing reads the Chat as it stands and writes any words fresh, as a one-off Look-again does.
 
 1. **The Chat.** Pick it as for a one-off, and give its exact Chat ID, or `none` for work about no Chat, such as "every morning at 8, tell me who I owe". A repeat about no Chat only tells the Owner.
-2. **The days.** `--every day`, `--every weekday` for Monday to Friday, `--every weekend`, or day names joined by commas, such as `--every mon,wed,fri`. The names are `sun`, `mon`, `tue`, `wed`, `thu`, `fri`, and `sat`.
-3. **The time.** `--time` is a 24-hour time in this Mac's zone, such as `--time 08:00` or `--time 18:30`, with no offset. A Mac that travels fires at 8:00 wherever it is. When the Owner names the days and no hour, pick a sensible one, such as 9:00, and say which.
+2. **The interval or days.** For "every 12 hours", use `--every 12h`, with no `--time`. Whole minutes or hours from `1m` to `720h` work. The first run is one interval from now, and later runs keep that cadence across sleep, restarts, travel, and daylight-saving changes. Missed runs never send a burst. For calendar days, use `--every day`, `--every weekday` for Monday to Friday, `--every weekend`, or day names joined by commas, such as `--every mon,wed,fri`. The names are `sun`, `mon`, `tue`, `wed`, `thu`, `fri`, and `sat`.
+3. **The calendar time.** `--time` is a 24-hour time in this Mac's zone, such as `--time 08:00` or `--time 18:30`, with no offset. A Mac that travels fires at 8:00 wherever it is. When the Owner names the days and no hour, pick a sensible one, such as 9:00, and say which.
 4. **Send.** Add `--send` by the same table as for a one-off: "text Dana good morning every day" sends, and "every morning, tell me who I owe" only tells. From a terminal, `--send` also needs `--confirmed`.
 5. **The end.** With no `--until`, it repeats until the Owner stops it. Give `--until` with an ISO time when the Owner names an end, such as "every day until she's back on the 20th". It must come after the first firing, and at most 365 days out.
 6. **The note.** As for a one-off: one line on what each firing should look at and do, never the message itself.
 
 `--every` takes no `--at`, `--in`, `--when-they-write`, or `--unless-answered`. Whether a firing still fits is the woken run's call at the time.
 
-Repeats go by day, at a time of day. When the Owner asks for one every hour or every few minutes, say in one line that the Companion can't repeat by the hour, and offer a time each day instead.
-
-The first firing is the first of those days and times after now. Tell the Owner in your own words what you set: who, which days and time, whether it sends or only tells them, and the end if there is one, such as "Every weekday at 8:00 I'll text Dana good morning, written fresh each day, and tell you what went. Text stop to end it." When two of its sends in a row get no answer, the Companion pauses it and asks the Owner whether to keep going.
+The first calendar firing is the first of those days and times after now. An interval first fires one interval from now. Tell the Owner in your own words what you set: who, the interval or days and time, whether it sends or only tells them, and the end if there is one, such as "Every weekday at 8:00 I'll text Dana good morning, written fresh each day, and tell you what went. Text stop to end it." When two of its sends in a row get no answer, the Companion pauses it and asks the Owner whether to keep going.
 
 It prints `Repeating Look-again set` with the request ID, the days and time, the next firing in this Mac's zone, whether it may send, and its end if it has one. `already set` means the same repeat is already running, from this run or an earlier one, and nothing new was added. The other outputs mean what they mean for a one-off, in the table above. An `APP_CLI_UNSUPPORTED` that says this Beeper Companion is older than repeating Look-agains means it needs an update. Tell the Owner, and don't build a timer instead.
 
@@ -129,10 +125,10 @@ Your prompt says what woke you, a time or their message, and how late you are. I
 
 ### A repeating Look-again
 
-A firing of a repeat wakes you as any Look-again does, and your prompt adds `repeat`: `every` and `time` are its schedule, `firing` says which firing this is, and `missed` counts the ones before it that never ran, as when the Mac was asleep.
+A firing of a repeat wakes you as any Look-again does, and your prompt adds `repeat`: `every` is its schedule, `time` is its calendar time or null for an elapsed interval, `firing` says which firing this is, and `missed` counts the ones before it that never ran, as when the Mac was asleep.
 
 - Write fresh words from the Chat as it stands, every firing. Never copy an earlier firing's text.
-- Skip a firing the Chat makes wrong: serious or sad news, being asked to stop or to give space, the Owner having already texted them today, or anything else the words don't fit. Send nothing, and answer one line saying what you skipped and why, such as "Skipped good morning to Dana: you already texted her at 7:40." A skipped firing is something to tell.
+- Skip a firing the Chat makes wrong: serious or sad news, being asked to stop or to give space, the Owner already having done the requested work for this firing, or anything else the words don't fit. An earlier text today does not cancel a later interval update. Follow the Owner's requested cadence and use fresh evidence for an update about their work. Send nothing, and answer one line saying what you skipped and why, such as "Skipped good morning to Dana: you already texted her at 7:40." A skipped firing is something to tell.
 - Answer `(nothing)` only when there is nothing to tell, such as "tell me if anyone's waiting" when nobody is.
 - A late firing tells what it would have done, in one line, and never sends.
 - Never set another Look-again to stand in for the schedule, and never change the schedule. The app fires the next one.

@@ -130,11 +130,11 @@ test('the older-history view marks the message and never offers a newest referen
   assert.doesNotMatch(out, /Last message is from/);
 });
 
-test('reactions name who reacted, and iMessage words become emoji', () => {
+test('reactions name who reacted and preserve native iMessage keys', () => {
   const c = chat({ id: '!room-a', title: 'Ann' });
   const ann = c.participants.items[0].id;
   const msgs = [{ id: '$1', isSender: true, text: 'see you there', timestamp: new Date(NOW - 3_600_000).toISOString(), reactions: [{ reactionKey: 'love', participantID: ann }, { reactionKey: '👍', isSender: true }] }];
-  assert.match(renderChat(c, msgs, { now: NOW }), /\[reactions ❤️ Ann · 👍 me\]  «see you there»/);
+  assert.match(renderChat(c, msgs, { now: NOW }), /\[reactions love Ann · 👍 me\]  «see you there»/);
   // A tapback read from the Messages database carries only the sender's number.
   const tap = [{ ...msgs[0], reactions: [{ reactionKey: '😂', participantName: '+15550100001', isSender: false }] }];
   assert.match(renderChat(c, tap, { now: NOW, contacts: buildIndex(CONTACT_ROWS) }), /\[reactions 😂 Ada Lovelace\]/);

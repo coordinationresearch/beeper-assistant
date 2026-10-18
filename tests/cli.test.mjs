@@ -40,7 +40,7 @@ test('a missing Beeper CLI gives the install command', () => {
 });
 
 test('search checks its input before it reaches Beeper', () => {
-  assert.match(run('search').stderr, /Give words, or --media/);
+  assert.match(run('search').stderr, /Give words, --media, or --opens-group/);
   assert.match(run('search', 'x', '--media', 'photos').stderr, /--media takes any, image, video, file, link/);
   assert.match(run('search', 'x', '--from', 'ann').stderr, /--from takes me or them/);
   assert.match(run('search', 'x', '--max', '500').stderr, /--max must be between 1 and 100/);

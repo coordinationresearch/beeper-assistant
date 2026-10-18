@@ -11,7 +11,7 @@ export const INSTRUCTION_MAX_CHARS = 2000;
 /** @typedef {{chatID: string, turnID?: number}} InstructionSource */
 /** @typedef {{id: string, text: string, scope: InstructionScope, source: InstructionSource, at: string, status: 'active'|'superseded'|'undone', supersedes?: string, sig: string}} OwnerInstruction */
 /** @typedef {{text: string, scope: InstructionScope, source: InstructionSource, supersedes?: string}} InstructionInput */
-/** @typedef {{dir?: string, now?: number, waitMs?: number, sign: (instruction: Omit<OwnerInstruction, 'sig'>) => string, shouldCommit?: () => boolean|Promise<boolean>}} InstructionOptions */
+/** @typedef {{dir?: string, now?: number, waitMs?: number, sign: (instruction: Omit<OwnerInstruction, 'sig'>) => string, shouldCommit?: () => boolean|Promise<boolean>, requires?: string}} InstructionOptions */
 /** @typedef {{status: 'added'|'duplicate'|'stale', instruction?: OwnerInstruction}} AddInstructionResult */
 /** @typedef {{status: 'undone'|'already-undone'|'missing'|'stale', instruction?: OwnerInstruction, restored?: OwnerInstruction}} UndoInstructionResult */
 /** @typedef {{status: 'deleted'|'missing'|'replaced'|'stale', removed?: OwnerInstruction[]}} DeleteInstructionResult */
@@ -91,15 +91,17 @@ export async function listInstructions({ dir } = {}) {
 
 /** No normalization: the Owner's exact wording and whitespace are retained.
  * Replacement is explicit, names an active predecessor, and cannot change its scope.
+ * requires: a record that must still be active, such as the one a wider copy is saved from.
  * @param {InstructionInput} input
  * @param {InstructionOptions} options
  * @returns {Promise<AddInstructionResult>}
  */
-export async function addInstruction(input, { dir, sign, shouldCommit, now = Date.now(), waitMs } = {}) {
+export async function addInstruction(input, { dir, sign, shouldCommit, requires, now = Date.now(), waitMs } = {}) {
   const clean = cleanInput(input);
   return withLock(OWNER_INSTRUCTIONS_KEY, async (doc, save) => {
     const items = verifiedRecords(doc, sign);
     if (shouldCommit && !await shouldCommit()) return { status: 'stale' };
+    if (requires !== undefined && !items.some(i => i.id === requires && i.status === 'active')) return { status: 'stale' };
     const duplicate = items.find(i => i.status === 'active' && i.text === clean.text && sameScope(i.scope, clean.scope));
     if (duplicate) {
       // An exact duplicate is a no-op, so it cannot also claim to replace a different rule.

@@ -2,7 +2,7 @@
 
 With Beeper Companion running, `ba` works through it. `ba send`, `ba react`, and `ba draft` work as always, and the Companion records and checks each one. The `ba app` commands below do what the Owner's own buttons do, and read what the app knows. They call the Companion through a private loopback connection. Most print JSON, and `ba app later` prints sentences.
 
-From a terminal they work while Beeper Companion is running, unless the Owner pressed Remove in its Settings → Skill. An Ask the Companion started, such as a text from the Line, has its run ID in `COMPANION_RUN`. `ba` sends it with every request, so that run's commands work even after Remove, `ba app status` and `ba app replies` aside. Every other `ba` command in that run also runs inside the Companion, with no Node or Beeper CLI needed.
+From a terminal they work while Beeper Companion is running, unless the Owner pressed Remove in its Settings → Troubleshooting. An Ask the Companion started, such as a text from the Line, has its run ID in `COMPANION_RUN`. `ba` sends it with every request, so that run's commands work even after Remove, `ba app status` and `ba app replies` aside. Every other `ba` command in that run also runs inside the Companion, with no Node or Beeper CLI needed.
 
 Every app command that names a Chat takes the exact Chat ID Beeper's API uses, starting with `!` or `imsg##`: `chatID` from `ba app auto list`, or `id` from `ba find "<name>" --json`. App commands never resolve names or `c…` references.
 
@@ -22,7 +22,7 @@ What each answer means, and what to do:
 - **Not sent yet, the Mac is locked**: Beeper sends iMessages through the Mac's Messages app, which can't send while the Mac is locked, so the Companion holds the message as a Timed send. It goes when the Mac unlocks, by the time printed, or not at all if the Owner writes there first. Tell the Owner that in one line. Don't send it again, and don't try another network or another way. `ba app later stop` with the printed request ID cancels it.
 - **Not sent, the Mac is locked**: a Reaction, or an older Companion that can't hold a message. Nothing went out, and nothing was queued. Tell the Owner in one line that it didn't go because the Mac is locked, with the words you meant to send, so they can send it from their phone. Don't try another network or another way.
 
-With no Beeper Companion on this Mac, or one the Owner closed to terminals (Remove in its Settings → Skill), `ba send`, `ba react`, and `ba draft` work as they always did, straight to Beeper.
+With no Beeper Companion on this Mac, or one the Owner closed to terminals (Remove in its Settings → Troubleshooting), `ba send`, `ba react`, and `ba draft` work as they always did, straight to Beeper.
 
 ## Sends that may have gone out
 
@@ -43,17 +43,53 @@ Settled, the Chat is free. Answers are JSON: `{ "ok": true, "settled": "sent" }`
 | `ba app pause off` | turns it back on |
 | `ba app check now` | Check Now: reads every Chat again for the list now. Refused while paused |
 | `ba app keep drafting` | Keep Drafting Today: Agent Drafts go on past the daily budget for the rest of today |
+| `ba app sidebar tip dismiss` | Dismiss on the menu bar panel's once-only line after Setup that says where the sidebar shows |
+| `ba app reply leave out first <chatID>` | The × on the first message of the sidebar's Reply in Beeper's box, in the Chat on screen: the Reply keeps its other Steps, and the box holds its next message, or nothing when only Reactions are left. Keeps only the Steps the sidebar showed kept, and refuses until it has shown that Reply. Refused once while an edit the Companion hasn't seen is in the box |
 | `ba app reply stop <chatID>` | Stop on a Reply that is sending there: its waiting Steps are cancelled. What already went stays sent |
+| `ba app uninstall` | Uninstall in Settings → Data: the Companion asks the Owner on the Mac whether to remove itself and what it keeps. Nothing goes unless they click Uninstall there |
 | `ba app brief <chatID>` | Brief now: writes that Chat's Brief and prints it as JSON in `brief`, or gives back the saved one (`reused: true`) when it already read the newest message. The sidebar shows it when the Owner opens the Chat |
 
 Each answers JSON with `ok`, and a fixed `message` when it changed nothing. Do these when the Owner asks, or when what they asked plainly needs one, and say what you changed.
 
+## Diagnostics and private Incidents
+
+Use `ba app diagnostics view` for current fixed-code operational health, and `ba app diagnostics send` when the Owner asks to send those counts now. `ba app diagnostics off` and `ba app diagnostics on` change automatic reporting.
+
+Private Incident sharing is separate. Start it only when the Owner asks to share evidence with the developers. Open the native preview with `ba app incident open`, or use these commands:
+
+- `ba app incident list` lists local Incident records and available recent Runs.
+- `ba app incident preview '<JSON selection>'` freezes evidence locally. The selection has exactly `window`, `runIds`, and `categories`. Use `window: null` for the last 24 hours, or `{ "since": "<UTC ISO instant>", "until": "<UTC ISO instant>" }` for at most seven days. Select at most ten exact Run IDs from the list. `categories` has four booleans, `prompts`, `outputs`, `feedback`, and `tools`. All default choices should be false; selecting private categories requires specific Runs.
+- `ba app incident view <bundleID>` returns the frozen preview, its exact payload, digest, categories, and evidence gaps. It does not upload.
+- `ba app incident share <bundleID> <previewSHA256>` shares those exact bytes. Show the Owner what the preview contains and use it only when their request covers sharing that evidence. The command checks the frozen digest. A general request to debug does not authorize sharing private text.
+- `ba app incident copy <bundleID>` copies an Admin link for a confirmed shared Incident to the clipboard and returns the link. It grants no read access and sends no message.
+- `ba app incident status <bundleID>` checks an uncertain upload or deletion without uploading evidence. After an uncertain upload, check status before any explicit retry. A retry uses the same frozen ID and digest.
+- `ba app incident delete <bundleID>` deletes a local preview, or requests deletion of the shared Incident. Use it on the Owner's request. A deletion still in progress needs another status check or explicit deletion attempt, not a claim that the evidence is gone.
+
+Private command output can contain messages, prompts, answers, commands, and paths. Keep it out of logs and shared artifacts. Evidence is bounded and may be clipped; show its gaps. Tool results and changed-file contents are unavailable. Shared evidence expires fourteen days after its first upload. Local AI-history deletion clears frozen private previews while preserving the IDs and capabilities needed to delete shared evidence separately. Uninstalling removes that local capability; server expiry still applies. Support IDs locate evidence for signed-in current Admins and cannot read it by themselves.
+
 ## Status and Replies
 
-- `ba app status` prints the running version and commit, which Previews are on, the Matched Chat ID, and the menu bar's rows by kind and age. Rows contain no message text or names. It runs in every mode.
+- `ba app status` prints the running version and commit, which Previews are on, the Matched Chat ID, and the menu bar's rows by kind and age. Rows contain no message text or names. A Triage row also carries its `band` (`must`, `should`, or `rest`): the headings `ba triage` prints the same rows under are MUST, SHOULD, ALSO OWED, and UNSURE. It runs in every mode.
 - `ba app replies <chatID>` runs the sidebar's Reply generator for that exact Beeper Chat ID and prints suggestions with Directions. It never selects the Chat, installs suggestions, places a Draft, or sends. The call uses the Daily budget and refuses while another terminal preparation is running. Ctrl-C disconnects and cancels the work. Use the `matchedChatID` from status or an exact ID from a read command's JSON.
 
 Returned suggestions are local terminal output and can contain private text. Keep them out of logs and shared artifacts.
+
+## Add an account to Contacts
+
+When the Owner asks to add an Instagram, X, or Telegram account to an existing Contacts card, run `ba app contact matches <chatID>`, with `--search "<name>"` to narrow the cards. It returns the Chat's username and named choices. Names and initials rank the choices; they do not establish that two accounts belong to one Person.
+
+Use the choice the Owner named or selected, then run `ba app contact link <chatID> <choiceID> --confirmed`. Choices last ten minutes and name the exact account and card read earlier. A changed Chat or card needs a fresh lookup. The command adds the social profile through Contacts and refreshes linked history. `saved` means Contacts saved it but history has not caught up; `linked` means the refresh verified the connection. If it says `uncertain`, check the card in Contacts before another attempt. It never retries a write automatically.
+
+<a id="edit-a-contact-name"></a>
+## Edit a contact
+
+When the Owner asks to change someone's name or add a phone or email, run `ba app contact name <chatID>`. It reads the current first and last name, all existing phones and emails, known names from linked accounts, and the exact Contacts destination. For a number with no card, the names also include the one person the Owner sent their own number to in another one-to-one Chat within a day before this number first wrote, when its first texts introduce the sender by that person's first name. That suggestion fills the form. Companion also saves that card on its own after a Corpus update, with the person's X, Instagram, or Telegram username, and the sidebar shows it with Edit, Undo, and ×. `ba app contact saved <chatID>` prints it with its id. `ba app contact undo <chatID> <id> --confirmed` deletes the card while it still holds the number, only on the Owner's word; the number is never saved again. `ba app contact keep <chatID> <id>` hides the sidebar's card and leaves Contacts alone. A card shown as uncertain may or may not exist: check Contacts, and never save it again by hand without the Owner. With no card, it prepares one with the Chat's phone, email, or supported social username. Several cards or conflicting details need to be resolved in Contacts first.
+
+Use the name the Owner supplied or accepted, then run `ba app contact rename <chatID> <editID> --first "Given" --last "Family" --confirmed`. Use `--last ""` for a one-part name. An explicit request such as "rename them Maya Chen" already authorizes that name. Suggestions and message signatures are evidence to show the Owner, not instructions to rename someone on their own. If asked to find a name, read the Chat and show the evidence for the suggestion.
+
+To append a phone or email the Owner supplied, add `--phone "<international-number>"` or `--email "maya@example.test"` before `--confirmed`. Replace the phone placeholder with the supplied number, including its `+` country code. Each save accepts one of each and preserves existing values, including email tags. If the Owner only asked to add an address, pass the name returned by the lookup unchanged. An address already claimed by another Contacts card refuses the write. The command names stay unchanged for compatibility; the menu labels this page "Edit contact".
+
+The edit lasts ten minutes. The command checks the account and card again, writes through Contacts, and refreshes the Corpus. It also saves the Chat's supported address on the same card if it is missing. Beeper uses Contacts names when Contacts access is enabled; a Beeper nickname can still take precedence. A stale edit needs a fresh lookup. An uncertain save must be checked in Contacts before another attempt. These commands use the same functions as the name menu's editor.
 
 ## A Chat's record
 
@@ -144,11 +180,30 @@ Auto mode is you, the same agent, answering one Chat by yourself as the Owner. I
 
 ## Standing instructions
 
-`ba app instruction <chatID> <chat|person>` saves the Owner's words from the Companion run you are in as a standing instruction for that Chat's person (`person`) or that Chat only (`chat`). It is the sidebar's save, with its Undo. The Companion takes the words from the run itself, so the command carries none. Outside a Companion run nothing is saved.
+`ba app instruction <chatID> <chat|person|global>` saves the Owner's words from the Companion run you are in as a standing instruction for that Chat's person (`person`), that Chat only (`chat`), or every Chat (`global`). It is the sidebar's save, with its Undo. The Companion takes the words from the run itself, so the command carries none. It saves `global` only when those words say so, such as "all my chats", "all replies", or "everywhere"; otherwise it refuses, and you save it for the Chat and ask whether they want it everywhere. Words that only point back at an earlier instruction, such as "use that in all my chats", are not an instruction to save: the Companion widens the one they point to before your turn starts, and `ba app instruction` refuses them. Outside a Companion run nothing is saved.
 
 `ba app remember <chatID> <who|now|you|talk|history> <fact…>` saves a fact the Owner told the Companion run you are in about the person in that Chat, as the Owner's own line in that person's Person File, marked "you told the agent" with the date. Every word of the fact, past small ones like "your", must come from the Owner's words in this run, or the Companion refuses it. A misspelling of theirs may be fixed, but a number or a "not" must match what they wrote. A group, or someone the Owner hasn't written to, gets nothing. Outside a Companion run nothing is saved.
 
 `ba app forget <chatID> <fact…>` takes back a fact the Owner told the agent, when their words in the run you are in say it is wrong. Give the line's words as the Person File shows them, without "(you told the agent, ...)". Only a line they told the agent can go this way, never one they typed into the file, and their words in this run must name most of it and say it is wrong, with a "not" or a word such as "wrong" or "forget". The JSON says `"ok": true` when the line is gone, and `"status": "none"` when no fact they told the agent reads like that.
+
+`ba app instruction edit <instructionID>` replaces one standing instruction with the Owner's words in the Companion run you are in, in the same scope. Use it when their words in this run change an instruction they gave before. It changes only one that applies where the run is: that Chat's, that Chat's person's, or one for everywhere. Name it by the `id` that `ba app chat` prints under `instructions`. The Companion takes the words from the run, so the command carries none, and only an Ask can run it. `ba app instruction undo <instructionID>` takes back an active instruction and gives back the one it replaced, if any. `ba app instruction delete <instructionID> --confirmed` deletes one for good, with the versions it replaced, and only on the Owner's word. `ba app instruction widen <instructionID> <chat|person|global>` saves an instruction's same words again for a wider scope, such as every Chat, and keeps the narrower one; its Undo takes back only the widening. Only an Ask can run it, and only when the Owner's words in it name that scope, such as "use that in all my chats". These run the same functions as the sidebar's Undo, Use everywhere, and Delete and a Person page's Edit, Undo, and Delete.
+
+## A Person's File
+
+A Person's page in Home lets the Owner change their Person File where it shows it. These commands run the same functions as its buttons. Find the Person's ID with `ba who` or `ba people`.
+
+| Command | Does |
+|---|---|
+| `ba app person file <personID>` | prints the File as the page shows it. Each part has its lines, each with an `id` such as `f12`, its `text`, its `source`, `owner` when it is the Owner's own line, and `receipt` when a message backs it. Each Open loop has an `id`. `write` is `ready` when Write it now is offered. `file` is null when the Companion can't yet tell whose this Person's Chats are |
+| `ba app person line edit <personID> <lineID> <shownText> <newText> --confirmed` | puts the Owner's words in place of that line. The new line is theirs, kept word for word: no writer rewrites it and no part's size counts it. The old line stays removed |
+| `ba app person line remove <personID> <lineID> <shownText> --confirmed` | removes that line. It comes back only when a message newer than the removal says it again |
+| `ba app person line add <personID> <who\|now\|you\|talk\|history\|others> <text> --confirmed` | adds the Owner's own line to that part, such as who the person is to them when the File says nothing there. It starts a File that isn't written yet |
+| `ba app person line undo <personID> <undoID>` | takes back one of the three above by the `undo` its answer gave |
+| `ba app person loop done <personID> <loopID>` | marks one of their Open loops done |
+| `ba app person write <personID>` | Write it now: one first build of their File at once, on the Daily budget. Only for someone the Owner has written to one-to-one, and only before the File has read their Chats. It can take minutes. A run that read the Owner's words late spends it as background work, so Pause stops it |
+| `ba app note delete <chatID> <noteID>` | deletes a Note by the ID `ba notes` prints. It leaves a tombstone, so no agent saves the same Note again |
+
+The three line commands write the Owner's own words, which every draft treats as true. Run them only from the Owner's own terminal, on their explicit request, with the words they gave. An Ask can't run them. There, save what they told you with `remember` and take it back with `forget`. `shownText` is the line's `text` as `person file` printed it. When the line changed since, nothing is saved: read the File again and show the Owner what changed. Each answer that changed a line carries `undo`, which works for ten minutes, and only while nothing has changed those lines since.
 
 ## Intros
 
@@ -158,6 +213,7 @@ An Intro is a new group for two People, made only on the Owner's yes to the exac
 |---|---|
 | `ba app intro prepare --from <chatID> --from <chatID> --text "…"` | saves a card for the people in those two one-to-one Chats, with the message, and sends nothing. It answers with the card's text to show word for word, and `earlier`: made or uncertain Intros for the same two, or with someone of the same name, to name on the card. A newer card for the same two replaces an older one not yet made |
 | `ba app intro make <id>` | makes that card, once: a new group with the message. Only a later Ask in the same conversation can, on the Owner's words sent after an answer showed the card's text word for word. From a terminal, only a card the terminal saved |
+| `ba app intro pass <id> --confirmed` | Not now on that card: the sidebar stops showing it and nothing is made. The Owner's Send on the card in the sidebar runs the same make as `intro make` |
 | `ba app intros [<chatID>]` | the Intros on record, uncertain ones first, then newest first, or only those with that person's one-to-one Chat, or that group |
 
 Each Intro prints as JSON: `id`, `state`, `network`, `people` (each `chatID`, `name`, `handle`), `place`, `text`, `card` (the card's text), `group` once made, and `opener`: `sent`, `unverified`, or `unsent` with `openerCode` saying why, and `openerID`, the opening message's ID once it was found sent. `state` is `prepared`, `making`, `made`, `uncertain` when nobody can say whether the group was made, or `not-made` when the Owner said it wasn't. An Intro counts as done only once its `opener` is `sent`.
@@ -234,10 +290,10 @@ When a Chat turns Urgent, the Companion tells the Owner once: on the Line while 
 
 | Command | readonly | drafts | full |
 |---|---|---|---|
-| `status`, `replies`, `voice`, `auto list`, `line`, `sends` | yes | yes | yes |
+| `status`, `replies`, `voice`, `auto list`, `line`, `sends`, `person file` | yes | yes | yes |
 | `chat`, `timeline`, `intros`, `intro prepare`, `coordinations`, `round prepare`, `later list`, `runs` | no, but `chat` inside a Companion run | yes | yes |
-| `auto off`, `later stop`, `quiet`, `quiet off`, `coordination end`, `pause`, `reply stop`, `brief` | no | yes | yes |
-| `auto on`, `goal`, `clear`, `pick`, `go`, `instruction`, `remember`, `forget`, `intro make`, `round make`, `later`, `later resume`, `pause off`, `check now`, `keep drafting`, `send settle` | no | no | yes |
+| `auto off`, `intro pass`, `later stop`, `quiet`, `quiet off`, `coordination end`, `pause`, `reply stop`, `reply leave out first`, `brief`, `person write` | no | yes | yes |
+| `auto on`, `goal`, `clear`, `pick`, `go`, `instruction`, `instruction edit`, `undo`, `widen`, and `delete`, `remember`, `forget`, `person line edit`, `remove`, `add`, and `undo`, `person loop done`, `note delete`, `intro make`, `round make`, `later`, `later resume`, `pause off`, `check now`, `keep drafting`, `sidebar tip dismiss`, `send settle`, `uninstall` | no | no | yes |
 
 A Line text read late runs in drafts mode.
 
@@ -247,7 +303,7 @@ Report the result. A refusal never triggers a retry, a fallback to a standalone 
 
 | Code | Means |
 |---|---|
-| the fixed "skill is removed" message | the Owner removed the skill in Settings → Skill, and no Companion run let the command through. Don't ask the Owner to Install it again to finish a request. Say what didn't run |
+| the fixed "skill is removed" message | the Owner removed the skill in Settings → Troubleshooting, and no Companion run let the command through. Don't ask the Owner to Install it again to finish a request. Say what didn't run |
 | `APP_CLI_LATE` | this run started from a late text. Only reads, `auto off`, saving an Intro card, listing or stopping Look-agains, and `quiet` work. Tell the Owner to text it again |
 | `APP_CLI_AUTO_OFF` | Auto mode is off in the Companion's Settings. Only the Owner turns it on there |
 | `APP_CLI_LINE_CHAT` | that is the Line's own Chat, where nothing runs |

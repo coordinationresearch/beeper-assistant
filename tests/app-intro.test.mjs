@@ -97,6 +97,10 @@ test('each Intro command is one exact request, worked out before anything connec
   assert.deepEqual([prepare.command, prepare.capability, prepare.path, prepare.payload, prepare.stdin], ['intro prepare', 'intro', '/intro/prepare', { chatIDs: [ANA, BEN], text: 'Meet each other' }, false]);
   assert.equal(appCommand(['intro', 'prepare', '--text', '-', '--from', ANA, '--from', BEN]).stdin, true);
   assert.deepEqual(appCommand(['intro', 'make', ID]), { command: 'intro make', capability: 'intro', path: '/intro/make', payload: { id: ID } });
+  // Not now on the sidebar's card is an Owner action in the table (lib/actions.mjs).
+  const pass = appCommand(['intro', 'pass', ID, '--confirmed']);
+  assert.deepEqual([pass.command, pass.capability, pass.path, pass.payload], ['intro pass', 'actions', '/intro/pass', { id: ID, confirmed: true }]);
+  for (const args of [['intro', 'pass', ID], ['intro', 'pass', 'i1A2B3C4D', '--confirmed']]) assert.throws(() => appCommand(args), /Usage:/, args.join(' '));
   const all = appCommand(['intros']), one = appCommand(['intros', ANA]);
   assert.deepEqual([all.command, all.capability, all.path, all.payload], ['intros', 'intro', '/intros', {}]);
   assert.deepEqual([one.path, one.payload, one.chatID], ['/intros', { chatID: ANA }, ANA]);
@@ -129,7 +133,7 @@ test('preparing and reading are plain reads, and a lost answer on them says noth
   assert.deepEqual(old.requests, []);
 });
 
-test('modes: reading and preparing Intros run in drafts and full, making one in full only, none in readonly', async t => {
+test('modes: reading and preparing Intros run in drafts and full, and in readonly inside a Companion run; making one in full only', async t => {
   const app = await fakeApp(t, { answer: path => [200, path === '/intros' ? { intros: [VIEW] } : path === '/intro/prepare' ? { ok: true, intro: VIEW } : { ok: true, status: 'made', intro: MADE }] });
   const { ba, reset } = setup(app);
   const commands = {
@@ -137,7 +141,8 @@ test('modes: reading and preparing Intros run in drafts and full, making one in 
     'intro prepare': [['intro', 'prepare', '--from', ANA, '--from', BEN, '--text', TEXT], '/intro/prepare'],
     'intro make': [['intro', 'make', ID], '/intro/make'],
   };
-  const allowed = { readonly: [], drafts: ['intros', 'intro prepare'], full: Object.keys(commands) };
+  // Inside a run, readonly may save and list cards: the app lets only an Intro request's run do it (ADR 0268).
+  const allowed = { readonly: ['intros', 'intro prepare'], drafts: ['intros', 'intro prepare'], full: Object.keys(commands) };
   for (const [mode, names] of Object.entries(allowed)) {
     for (const [name, [args, path]] of Object.entries(commands)) {
       reset();
@@ -152,6 +157,15 @@ test('modes: reading and preparing Intros run in drafts and full, making one in 
         assert.deepEqual(app.requests, [], `${mode} ${name} made a request`);
       }
     }
+  }
+  // From a terminal, readonly reads and saves none.
+  const terminal = setup(app, { run: null });
+  for (const [name, [args]] of Object.entries(commands)) {
+    reset();
+    const r = await terminal.ba(['app', ...args], { extra: { BEEPER_ASSISTANT_READONLY: '1' } });
+    assert.equal(r.status, 2, `terminal readonly ${name}`);
+    assert.match(r.stderr, /^usage: Read-only mode is on, so "app intro[a-z ]*" did not run/);
+    assert.deepEqual(app.requests, []);
   }
   // ba group is full mode only, as before.
   reset();

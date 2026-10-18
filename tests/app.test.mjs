@@ -38,3 +38,22 @@ test('Replies CLI sends the exact ID and prints Directions without a standalone 
   assert.equal(JSON.parse(output[0]).suggestions[0].direction, 'Agree');
   assert.equal('intent' in JSON.parse(output[0]).suggestions[0], false);
 });
+
+test('menu CLI preserves separate Messages, old single-text requests, and Stop', async () => {
+  const { ACTIONS } = await import('../scripts/lib/actions.mjs');
+  const reply = ACTIONS.find(action => action.name === 'menu reply');
+  const rowID = 'a'.repeat(16), version = 'b'.repeat(16);
+  const single = reply.parse([rowID, version, 'Friday works', '--confirmed']);
+  assert.deepEqual(single, { rowID, version, arg: 'Friday works', confirmed: true });
+  assert.equal(reply.check(single), true);
+  const multiple = reply.parse([rowID, version, 'Friday works', 'See you there\nAt seven', '--confirmed']);
+  assert.deepEqual(multiple, { rowID, version, arg: ['Friday works', 'See you there\nAt seven'], confirmed: true });
+  assert.equal(reply.check(multiple), true);
+  for (const arg of [[], ['One', ''], ['One', 2], Array(11).fill('one'), ['x'.repeat(10_000), 'two']]) assert.equal(reply.check({ ...multiple, arg }), false);
+  assert.throws(() => reply.parse([rowID, version, 'One', 'Two']), /usage/);
+  const react = ACTIONS.find(action => action.name === 'menu react');
+  assert.equal(react.check(multiple), false);
+  const stop = ACTIONS.find(action => action.name === 'menu stop');
+  assert.deepEqual(stop.parse([rowID]), { rowID });
+  assert.equal(stop.check({ rowID }), true);
+});

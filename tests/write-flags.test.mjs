@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { test } from 'node:test';
 import * as vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
@@ -31,7 +32,7 @@ async function replay(argv, { alias = false, text = source, existing = '', line 
   let messages = [{ id: 'msg-1', text: 'Synthetic question', isSender: false }, ...more];
   const mutate = (name, result) => (...args) => { mutations.push([name, args]); return result; };
   const mocks = {
-    BeeperError: class extends Error {}, NotesError: class extends Error {}, HistoryError: class extends Error {}, PlaybookError: class extends Error {},
+    resolve, BeeperError: class extends Error {}, NotesError: class extends Error {}, HistoryError: class extends Error {}, PlaybookError: class extends Error {},
     readFileSync: () => { throw Error('absent'); },
     existsSync: () => false, mkdirSync: mutate('mkdir'), writeFileSync: mutate('file'), homedir: () => '/synthetic',
     stateDir: () => '/synthetic', loadState: () => state, saveState: mutate('state'), isLineChat: (id) => line.includes(id),
@@ -196,6 +197,20 @@ if (!vm.SourceTextModule) {
     const reacted = await replay(['react', ...cases.react, '--confirmed'], { env, app: { deliveryLines, deliverThroughApp: async () => ({ answer: { ok: true, status: 'sent' } }) } });
     assert.equal(reacted.stdout, OUTPUT.react.stdout);
     assert.deepEqual(reacted.mutations, []);
+  });
+  test('file and image commands send exact local paths through the Companion with optional captions', async () => {
+    const { deliveryLines } = await import('../scripts/lib/app.mjs');
+    for (const caption of ['', 'Here is the proposal']) {
+      const asked = [];
+      const app = { deliveryLines, deliverThroughApp: async (kind, body) => { asked.push([kind, body]); return { answer: { ok: true, status: 'sent', messageID: 'sent-file' } }; } };
+      const args = ['send', '!one', '--file', '/synthetic/proposal.pdf', '--after', 'msg-1', '--confirmed', ...(caption ? ['--text', caption] : [])];
+      const result = await replay(args, { env: { COMPANION_RUN: 'fixture' }, app });
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(JSON.parse(JSON.stringify(asked)), [['send', { chatID: '!one', text: caption, file: '/synthetic/proposal.pdf', after: 'msg-1' }]]);
+      assert.deepEqual(result.mutations, []);
+    }
+    const timed = await replay(['send', '!one', '--file', '/synthetic/proposal.pdf', '--after', 'msg-1', '--at', '2099-01-01T12:00:00Z', '--confirmed']);
+    assert.match(timed.stderr, /Timed file sends are not supported/); assert.deepEqual(timed.mutations, []);
   });
   // A run's Draft goes through the app's one draft writer too, never straight to Beeper (ADR 0110),
   // and over exactly the draft it read when told to replace it.

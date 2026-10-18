@@ -172,6 +172,36 @@ export async function corpusMessage(file, key) {
   return rows[0] || null;
 }
 
+// The Owner's first message in each group Chat they opened, newest first, so a new group's
+// opener, such as an Intro, can copy how this Owner opens one. `members` keeps groups with exactly
+// that many people besides the Owner. Every word must appear, in any case. Only the Owner's own
+// words, so they may shape a card the Owner reads whole before it goes (ADR 0093).
+const OPENER_CHARS = 800;
+export async function groupOpeners(file, { members = 0, words = '', sinceMs = 0, max = 20 } = {}) {
+  const rows = await query(file, `WITH mem AS (
+      SELECT cm.chat_key, coalesce(p.display_name, h.display_name) AS name FROM chat_members cm JOIN handles h ON h.handle_key = cm.handle_key
+        LEFT JOIN person_members pm ON pm.member_key = h.handle_key LEFT JOIN people p ON p.person_id = pm.person_id
+      WHERE h.is_owner = 0 AND cm.chat_key IN (SELECT chat_key FROM chats WHERE kind = 'group' AND merged_into IS NULL)),
+    groups AS (SELECT chat_key, json_group_array(name) AS names FROM mem GROUP BY chat_key${members ? ` HAVING count(*) = ${Number(members)}` : ''}),
+    firsts AS (SELECT m.chat_key, m.from_owner, m.text, m.sent_at, row_number() OVER (PARTITION BY m.chat_key ORDER BY m.sent_at, m.id) AS rn
+      FROM messages m WHERE m.chat_key IN (SELECT chat_key FROM groups) AND m.duplicate_of IS NULL AND m.retracted = 0 AND m.source_state = 'present' AND m.kind <> 'other')
+    SELECT f.text, f.sent_at, c.network, groups.names FROM firsts f JOIN groups ON groups.chat_key = f.chat_key JOIN chats c ON c.chat_key = f.chat_key
+    WHERE f.rn = 1 AND f.from_owner = 1 AND trim(coalesce(f.text, '')) <> '' AND f.sent_at >= ${Number(sinceMs) || 0} ORDER BY f.sent_at DESC`);
+  const want = String(words).toLowerCase().split(/\s+/).filter(Boolean);
+  const items = [], seen = new Set();
+  for (const r of rows) {
+    const lower = r.text.toLowerCase();
+    if (!want.every((w) => lower.includes(w))) continue;
+    // One message sent to several groups is one example.
+    if (seen.has(r.text)) continue;
+    seen.add(r.text);
+    if (items.length >= max) return { items, more: true };
+    items.push({ at: new Date(r.sent_at).toISOString(), network: r.network, members: JSON.parse(r.names).filter(Boolean).sort(),
+      text: r.text.length > OPENER_CHARS ? `${r.text.slice(0, OPENER_CHARS)}…` : r.text });
+  }
+  return { items, more: false };
+}
+
 // The Mind map the Beeper Companion writes for agents, next to its corpus, or null when it has none.
 export const mindMapPath = (file = corpusPath()) => join(dirname(file), 'mind-map.md');
 // The Person File the Beeper Companion keeps for one Person, next to the corpus, written from their

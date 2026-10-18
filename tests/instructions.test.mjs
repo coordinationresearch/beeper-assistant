@@ -211,3 +211,14 @@ test('a skill copy from before Delete reads, verifies, and writes the file Delet
   assert.deepEqual((await deleteInstruction(next.instruction.id, opts)).removed.map(i => i.id), [next.instruction.id]);
   assert.deepEqual((await older.listInstructions(opts)).map(i => [i.text, i.status]), [['Kept rule', 'active']]);
 });
+
+test('a wider copy saved with requires commits only while its source is active, and older readers still read the file', async t => {
+  const opts = fixture(t);
+  const chat = (await addInstruction(input('Short replies'), opts)).instruction;
+  const wide = await addInstruction(input('Short replies', 'global', null), { ...opts, requires: chat.id });
+  assert.equal(wide.status, 'added');
+  assert.equal(wide.instruction.supersedes, undefined, 'unlinked: a replacement may not change scope');
+  await undoInstruction(chat.id, opts);
+  assert.equal((await addInstruction(input('Short replies', 'person', 'p1'), { ...opts, requires: chat.id })).status, 'stale');
+  assert.equal((await older.listInstructions({ dir: opts.dir })).length, 2, 'an older skill copy reads both records');
+});

@@ -84,7 +84,8 @@ test('the chat view hides system events and marks edits, deletions and reactions
   assert.ok(out.includes('[edited]  «fixed typo»'));
   assert.ok(out.includes('[deleted]  «I unsent a message»'));
   assert.equal(out.includes('You reacted'), false);
-  assert.ok(out.includes('(1 reaction or system event not shown)'));
+  assert.ok(out.includes('Reaction added on an unknown Target'));
+  assert.ok(!out.includes('not shown'));
   assert.ok(out.includes(`newest message: ${messageAlias('$3')}`));
 });
 
@@ -103,4 +104,26 @@ test('new chats are flagged, and marked-unread shows only when set by hand', () 
   const hand = renderChat({ ...chat({ title: 'Ann', unread: 0 }), isMarkedUnread: true }, [], { contacts, now: NOW });
   assert.equal(auto.includes('marked unread'), false);
   assert.ok(hand.includes('marked unread by hand'));
+});
+
+test('ba chat exposes a hidden native HAHA with its Target without inventing a Message', () => {
+  const messages = [
+    { id: 'invented-own', isSender: true, senderID: 'self', text: 'That was my mix-up', timestamp: new Date(NOW - 60_000).toISOString(), reactions: [{ participantID: 'friend', reactionKey: 'laugh' }] },
+    { id: 'invented-ha', type: 'REACTION', isHidden: true, senderID: 'friend', linkedMessageID: 'invented-own', timestamp: new Date(NOW).toISOString() },
+  ];
+  const out = renderChat(chat(), messages, { now: NOW });
+  assert.ok(out.includes(`Reaction added «laugh» on ${messageAlias('invented-own')}`));
+  assert.ok(out.includes('Last message is from me'));
+  assert.ok(out.includes('Newest activity is a Reaction from them, not a new Message'));
+  assert.ok(!out.includes('not shown'));
+  messages[1].isDeleted = true;
+  assert.ok(renderChat(chat(), messages, { now: NOW }).includes('Reaction removed'));
+});
+
+test('reaction lists retain native and custom keys even without separate events', () => {
+  const out = renderChat(chat(), [{ id: 'invented-target', text: 'A harmless joke', isSender: true, timestamp: new Date(NOW).toISOString(),
+    reactions: [{ reactionKey: 'laugh', participantID: 'one' }, { reactionKey: '😂', participantID: 'two' }] }], { now: NOW });
+  assert.ok(out.includes('laugh'));
+  assert.ok(out.includes('😂'));
+  assert.ok(!out.includes('😂x2'));
 });

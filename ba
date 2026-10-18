@@ -58,6 +58,6 @@ if [ "$home_ok" = 0 ]; then
   exit 78
 fi
 echo "FAIL  beeper-assistant needs the Beeper Companion app, or Node 18 or newer." >&2
-echo "      Fix: open Beeper Companion. If you removed the skill in Settings → Skill, click Install there." >&2
+echo "      Fix: open Beeper Companion. If you removed the skill in Settings → Troubleshooting, click Install there." >&2
 echo "      Or install Node: brew install node" >&2
 exit 127

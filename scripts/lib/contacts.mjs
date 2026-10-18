@@ -93,9 +93,12 @@ export function buildIndex(rows) {
   return { phones, tails, emails, people, size: rows.length };
 }
 
-const only = (set) => (set && set.size === 1 ? [...set][0] : null);
+const only = (set) => {
+  const names = [...(set || [])];
+  return names.length && names.every(name => name.toLowerCase() === names[0].toLowerCase()) ? names[0] : null;
+};
 
-// Returns a name only when exactly one contact owns the handle.
+// Display lookup accepts names that differ only in case. Card ownership stays distinct.
 export function nameFor(index, handle) {
   if (!index || !handle) return null;
   if (looksLikeEmail(handle)) return only(index.emails.get(normalizeEmail(handle)));

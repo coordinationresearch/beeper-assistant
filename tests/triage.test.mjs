@@ -149,6 +149,30 @@ test('an untitled group is named after its members', () => {
   assert.equal(chatName(c, contacts).name, 'Ada Lovelace, Grace Hopper');
 });
 
+test('a generated group title resolves member names and leaves the Owner out', () => {
+  const idx = buildIndex([
+    ...CONTACT_ROWS,
+    { first: 'JD', last: 'Example', value: '+15550100008', kind: 'phone' },
+    { first: 'Jd', last: 'Example', value: '+15550100008', kind: 'phone' },
+  ]);
+  for (const title of [
+    '+1 555-010-0001, +1 555-010-0008 & +1 555-000-0001',
+    '+1 555-010-0001, +1 555-010-0008, and +1 555-000-0001',
+    'ada@example.com & +1 555-010-0008',
+  ]) {
+    const c = chat({ type: 'group', title, unread: 1, others: [person({ phone: '+15550100001' }), person({ phone: '+15550100008' })] });
+    assert.equal(chatName(c, idx).name, 'Ada Lovelace, JD Example', title);
+    assert.deepEqual(buildTriage([c], { now: NOW, contacts: idx }).groups.map(r => r.name), ['Ada Lovelace, JD Example']);
+  }
+});
+
+test('custom group titles stay intact, including names with separators or numbers', () => {
+  for (const title of ['Research & Development', 'Ada, Grace and friends', 'Room 555-010-0001', 'Ada & Grace @ home']) {
+    const c = chat({ type: 'group', title, others: [person({ phone: '+15550100001' }), person({ phone: '+15550100002' })] });
+    assert.equal(chatName(c, contacts).name, title);
+  }
+});
+
 test('sender labels never show a raw network ID', () => {
   const c = chat({ type: 'group', title: 'Crew', others: [person({ name: 'A' }), person({ name: 'B' })] });
   assert.equal(senderLabel({ isSender: false, senderName: '@twitter_123:beeper.local', senderID: 'nope' }, c, contacts), 'someone');

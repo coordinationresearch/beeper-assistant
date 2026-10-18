@@ -1,7 +1,7 @@
 // Ranking the Triage list. Made-up rows and counts only.
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { CAUSES, CLASSES, closenessOf, compactCount, rankRows, wantOf } from '../scripts/lib/rank.mjs';
+import { CAUSES, CLASSES, bandOf, closenessOf, compareToday, compactCount, endOfLocalDay, rankRows, wantOf } from '../scripts/lib/rank.mjs';
 import { answerRate } from '../scripts/lib/history.mjs';
 
 const NOW = Date.parse('2026-09-27T20:00:00Z');
@@ -71,6 +71,7 @@ test('the four classes', () => {
   rank(rows, { q: KNOWN, thanks: CLOSE, stranger: NEW, pitch: NEW, late: CLOSE });
   const cls = Object.fromEntries(rows.map((r) => [r.id, r.rank.class]));
   assert.deepEqual(cls, { q: 'waiting', thanks: 'nothing', stranger: 'unsure', pitch: 'nothing', nohistory: 'unsure', late: 'urgent' });
+  assert.equal(rows.find((r) => r.id === 'late').rank.band, 'should', 'urgent by the rules alone sits in Should until a Judgment');
   assert.deepEqual(rows.map((r) => r.id).slice(0, 2), ['late', 'q']);
   assert.ok(rows.every((r, i) => i === 0 || CLASSES.indexOf(rows[i - 1].rank.class) <= CLASSES.indexOf(r.rank.class)));
 });
@@ -294,7 +295,7 @@ test('groups rank on mentions and how much the Owner writes there, and by rules 
   const [g1, g2] = ['g1', 'g2'].map((id) => rows.find((r) => r.id === id));
   assert.equal(g1.rank.class, 'unsure');
   assert.ok(g1.rank.factors.some((f) => f.name === 'mentions'), 'a mention still adds to its score');
-  assert.match(g1.rank.reason, /^Mentioned you · a group you rarely write in/);
+  assert.match(g1.rank.reason, /^Mentioned you · a group you have written in/);
   assert.equal(g2.rank.class, 'unsure');
   // Read, its messages showed the mention outside their Burst: it addresses nobody.
   const stale = [Object.assign(row({ id: 'g3', type: 'group', mentions: 1, texts: ['nice'] }), { addressed: null })];
@@ -304,6 +305,80 @@ test('groups rank on mentions and how much the Owner writes there, and by rules 
 
 test('counts read short', () => {
   assert.deepEqual([12, 1234, 1000, 23_456].map(compactCount), ['12', '1.2k', '1k', '23k']);
+});
+
+test('mentions lift only groups, and a Draft ready is a plus, not a minus (ADR 0263)', () => {
+  const single = [row({ id: 's', mentions: 2, texts: ['@owner are you free?'] })];
+  rank(single, { s: KNOWN });
+  assert.ok(!single[0].rank.factors.some((f) => f.name === 'mentions'));
+  const group = [row({ id: 'g', type: 'group', mentions: 2, texts: ['@owner are you free?'] })];
+  rank(group, { g: KNOWN });
+  assert.deepEqual(group[0].rank.factors.find((f) => f.name === 'mentions'), { name: 'mentions', points: 10 });
+  const drafted = [row({ id: 'd', draft: true }), row({ id: 'p' })];
+  rank(drafted, { d: KNOWN, p: KNOWN });
+  assert.deepEqual(drafted.find((r) => r.id === 'd').rank.factors.find((f) => f.name === 'draft'), { name: 'draft', points: 3 });
+});
+
+test('endOfLocalDay is the end of the Mac\'s local day, whatever the zone', () => {
+  // Built with local setters, so the test reads the same in any time zone.
+  const at = (h, m = 0, day = 27) => { const d = new Date(0); d.setFullYear(2026, 8, day); d.setHours(h, m, 0, 0); return d.getTime(); };
+  const end = at(0, 0, 28);
+  assert.equal(endOfLocalDay(at(23, 59)), end, 'a minute before midnight still ends tonight');
+  assert.equal(endOfLocalDay(at(0, 0)), end, 'midnight starts the day it ends');
+  assert.equal(endOfLocalDay(at(12, 30)), end);
+});
+
+test('the Band a row takes in Today (ADR 0263)', () => {
+  // A fixed local noon, built with local setters so the day bounds read the same in any zone.
+  const noon = new Date(0); noon.setFullYear(2026, 8, 30); noon.setHours(12, 0, 0, 0);
+  const now = noon.getTime();
+  const local = (h, m = 0, days = 0) => { const d = new Date(now); d.setDate(d.getDate() + days); d.setHours(h, m, 0, 0); return d.getTime(); };
+  const wait = (o = {}) => ({ type: 'single', closeness: 'known', lastFrom: 'them', ageMs: HOUR, markedUnread: false, unreadCount: 0,
+    waitingSince: new Date(now - (o.waitedMs ?? HOUR)).toISOString(), rank: { class: o.cls ?? 'waiting', judged: o.judged }, ...o });
+  const band = (r, o = {}) => bandOf(r, { now, ...o });
+  assert.equal(band(wait({ cls: 'urgent', judged: true })).band, 'must');
+  assert.equal(band(wait({ cls: 'urgent' })).band, 'should', 'the rules alone land an urgent Chat in Should until a Judgment');
+  assert.equal(band(wait({ cls: 'urgent', waitedMs: 7 * 24 * HOUR })).band, 'must', 'a rules-urgent Chat waiting seven days is still Must');
+  assert.equal(band(wait(), { deadline: new Date(local(23, 59)).toISOString() }).band, 'must', 'due tonight');
+  assert.equal(band(wait(), { deadline: new Date(local(0, 1, 1)).toISOString() }).band, 'should', 'due just after midnight');
+  assert.equal(band(wait(), { deadline: new Date(local(12, 0, -1)).toISOString() }).band, 'must', 'a passed deadline stays must');
+  assert.equal(band(wait(), { deadline: new Date(now + 5 * 24 * HOUR).toISOString() }).band, 'rest', 'five days out is on pace');
+  assert.equal(band(wait({ waitedMs: 7 * 24 * HOUR })).band, 'must', 'seven days waiting');
+  assert.equal(band(wait({ waitedMs: 3 * 24 * HOUR }), { pace: { p90Ms: 24 * HOUR, replied: 10 } }).band, 'should', 'past the Owner\'s pace with this Person');
+  assert.equal(band(wait({ waitedMs: HOUR }), { pace: { p90Ms: 30 * 60_000, replied: 10 } }).band, 'rest', 'a fast pair slips at the 48h floor, not the pace');
+  assert.equal(band(wait({ waitedMs: 3 * 24 * HOUR }), { pace: { p90Ms: HOUR, replied: 3 } }).band, 'should', 'thin history gets the floor');
+  const grp = band({ ...wait({ waitedMs: 3 * 24 * HOUR }), type: 'group' }, { pace: { p90Ms: 365 * 24 * HOUR, replied: 50 } });
+  assert.equal(grp.band, 'should', 'a group slips on the floor whatever the pace says');
+  const mine = band(wait({ cls: 'waiting', lastFrom: 'me', markedUnread: true }));
+  assert.deepEqual([mine.band, mine.slipping, mine.waitedMs], ['should', false, 0], 'marked unread with the Owner last has no wait');
+  assert.equal(band(wait({ cls: 'unsure' })).band, null);
+});
+
+test('compareToday orders each Band and the Bands against each other', () => {
+  // Must rows with no deadline that are not urgent (the seven-day waiters) sort after the
+  // dated ones, longest wait first.
+  const at = (rank, ageMs = HOUR) => ({ rank, ageMs });
+  const must = [
+    at({ band: 'must', class: 'waiting', deadline: null, waitedMs: 8 * 24 * HOUR, lineMs: 0 }),
+    at({ band: 'must', class: 'urgent', deadline: null, waitedMs: HOUR, lineMs: 0 }),
+    at({ band: 'must', class: 'waiting', deadline: new Date(NOW + 2 * HOUR).toISOString(), waitedMs: HOUR, lineMs: 0 }),
+    at({ band: 'must', class: 'waiting', deadline: new Date(NOW + 5 * HOUR).toISOString(), waitedMs: 9 * 24 * HOUR, lineMs: 0 }),
+    at({ band: 'must', class: 'waiting', deadline: null, waitedMs: 10 * 24 * HOUR, lineMs: 0 }),
+  ];
+  assert.deepEqual([...must].sort(compareToday).map((r) => r.rank.waitedMs), [HOUR, HOUR, 9 * 24 * HOUR, 10 * 24 * HOUR, 8 * 24 * HOUR]);
+  const should = [
+    at({ band: 'should', class: 'waiting', deadline: null, waitedMs: 24 * HOUR, lineMs: 48 * HOUR }),
+    at({ band: 'should', class: 'waiting', deadline: null, waitedMs: 4 * 24 * HOUR, lineMs: 48 * HOUR }),
+  ];
+  assert.deepEqual([...should].sort(compareToday).map((r) => r.rank.waitedMs), [4 * 24 * HOUR, 24 * HOUR], 'deepest past the line first');
+  const rest = [
+    at({ band: 'rest', class: 'waiting', deadline: null, waitedMs: 2 * HOUR, lineMs: 48 * HOUR }),
+    at({ band: 'rest', class: 'waiting', deadline: null, waitedMs: 20 * HOUR, lineMs: 48 * HOUR }),
+    at({ band: 'rest', class: 'waiting', deadline: null, waitedMs: 20 * HOUR, lineMs: 48 * HOUR }, 3 * HOUR),
+  ];
+  assert.deepEqual([...rest].sort(compareToday).map((r) => r.ageMs), [HOUR, 3 * HOUR, HOUR], 'longest wait first, then newest');
+  const mixed = [rest[0], must[1], should[0], at({ band: null, class: 'unsure', deadline: null, waitedMs: 0, lineMs: 0 })];
+  assert.deepEqual([...mixed].sort(compareToday).map((r) => r.rank.band), ['must', 'should', 'rest', null]);
 });
 
 test('a Chat where the Owner wrote last owes nothing, whatever the unread count says', () => {

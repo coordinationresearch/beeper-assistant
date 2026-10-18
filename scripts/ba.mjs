@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { resolve } from 'node:path';
 // beeper-assistant: task-shaped commands over the official Beeper CLI.
 // Reads are compact. Writes take exact chat references only and verify by reading back.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -9,7 +10,7 @@ import { addContact } from './lib/contacts-write.mjs';
 import { meCardNames } from './lib/addressed.mjs';
 import { gapsIn } from './lib/gaps.mjs';
 import { FIRST_MESSAGE_IN_CREATE, holdsExactly, memberKey, olderIMessageGroup } from './lib/groups.mjs';
-import { withMediaContext, searchMedia, corpusMessage, decideSame, findPeople, mindMapPath, openCorpus, personFilePath, personProfile } from './lib/corpus.mjs';
+import { withMediaContext, searchMedia, corpusMessage, decideSame, findPeople, groupOpeners, mindMapPath, openCorpus, personFilePath, personProfile } from './lib/corpus.mjs';
 import { HistoryError, chatStats, historyStatus, iMessageGroupMembers, messagesAround, strangerRates } from './lib/history.mjs';
 import { NotesError, addNote, deleteNote, listNotes } from './lib/notes.mjs';
 import { EVERYWHERE, PLAYBOOK_FILE, PlaybookError, addLesson, findSituation, lessonLine, lessonsFile, readLessons, readPlaybook } from './lib/playbook.mjs';
@@ -23,7 +24,7 @@ import { chatAlias, dismiss, isChatAlias, isLineChat, isMessageAlias, loadState,
 import { DEFAULT_WINDOW_DAYS, chatName, clip, counterparties, draftText, handlesOf, htmlToText, isGroup, isMessagePreview, previewKind, wantsHistory } from './lib/triage.mjs';
 
 const DAY = 86_400_000;
-const BOOL = new Set(['json', 'confirmed', 'replace', 'for-everyone', 'dismiss-on-message', 'help', 'all', 'dry-run']);
+const BOOL = new Set(['json', 'confirmed', 'replace', 'for-everyone', 'dismiss-on-message', 'help', 'all', 'dry-run', 'opens-group']);
 const MULTI = new Set(['to', 'from']);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -480,6 +481,7 @@ async function cmdSameOrDifferent(decision, { pos, flags }) {
 
 async function cmdSearch({ pos, flags }) {
   const query = pos.join(' ').trim();
+  if (flags['opens-group']) return searchOpeners(query, flags);
   const media = flags.media ? String(flags.media).toLowerCase().split(',').map((x) => x.trim()).filter(Boolean) : [];
   for (const m of media) if (!SEARCH_MEDIA.includes(m)) throw new UsageError(`--media takes ${SEARCH_MEDIA.join(', ')}. Join several with commas.`);
   const from = flags.from ? String(flags.from).toLowerCase() : null;
@@ -487,8 +489,9 @@ async function cmdSearch({ pos, flags }) {
   const days = flags.days === undefined ? 0 : Number(flags.days);
   if (flags.days !== undefined && !(days > 0)) throw new UsageError('--days must be a positive number');
   const max = flags.max === undefined ? 20 : Number(flags.max);
-  if (!(max >= 1 && max <= 100)) throw new UsageError('--max must be between 1 and 100');
-  if (!query && !media.length) throw new UsageError('Usage: search <words> [--chat <chat>] [--from me|them] [--media image,video,file,link,any] [--days N] [--max 20]. Give words, or --media.');
+  if (!(Number.isInteger(max) && max >= 1 && max <= 100)) throw new UsageError('--max must be between 1 and 100');
+  if (flags.members !== undefined) throw new UsageError('--members goes with --opens-group');
+  if (!query && !media.length) throw new UsageError('Usage: search <words> [--chat <chat>] [--from me|them] [--media image,video,file,link,any] [--days N] [--max 20]. Give words, --media, or --opens-group.');
 
   const state = loadState();
   const chat = flags.chat ? await resolveChat(flags.chat, state) : null;
@@ -521,6 +524,27 @@ async function cmdSearch({ pos, flags }) {
   }
   const filters = [chat && `in ${label(chat, contacts)}`, from && `from ${from}`, media.length && `with ${media.join(' or ')}`, days && `last ${plural(days, 'day')}`].filter(Boolean);
   console.log(renderSearch({ query, ...found }, { contacts, filters, max }));
+}
+
+// The Owner's first message in each group they opened, from the Corpus, so a new group's opener
+// copies how this Owner opens one. The Owner's own words: for a message the Owner reads first.
+async function searchOpeners(query, flags) {
+  if (Object.keys(flags).some((k) => !['opens-group', 'members', 'days', 'max', 'json'].includes(k))) throw new UsageError('--opens-group takes words, --members, --days, and --max');
+  const days = flags.days === undefined ? 0 : Number(flags.days);
+  if (flags.days !== undefined && !(days > 0)) throw new UsageError('--days must be a positive number');
+  const max = flags.max === undefined ? 20 : Number(flags.max);
+  if (!(Number.isInteger(max) && max >= 1 && max <= 100)) throw new UsageError('--max must be between 1 and 100');
+  const members = flags.members === undefined ? 0 : Number(flags.members);
+  if (flags.members !== undefined && !(Number.isInteger(members) && members >= 2)) throw new UsageError('--members counts the people besides the Owner, 2 or more');
+  const corpus = await openCorpus();
+  if (!corpus.ok) throw new UsageError(`No group openers: ${corpus.reason}. They need the Beeper Companion's corpus.`);
+  const found = await groupOpeners(corpus.file, { members, words: query, sinceMs: days ? Date.now() - days * DAY : 0, max });
+  if (flags.json) { console.log(JSON.stringify({ query, members: members || null, more: found.more, openers: found.items }, null, 1)); return; }
+  const filters = [members && `with ${plural(members, 'other person', 'other people')}`, query && `with "${query}"`, days && `last ${plural(days, 'day')}`].filter(Boolean);
+  if (!found.items.length) { console.log(`GROUP OPENERS · none${filters.length ? ` ${filters.join(', ')}` : ''}. The Owner opened no such group.`); return; }
+  const out = [`GROUP OPENERS · ${found.more ? `newest ${found.items.length}` : found.items.length}${filters.length ? ` ${filters.join(', ')}` : ''}. The Owner's own first message in each group they opened, newest first.`, ''];
+  for (const o of found.items) out.push(`${o.at.slice(0, 10)} · ${networkName(o.network)} · ${o.members.join(', ')}`, ...o.text.split('\n').map((l) => `  ${l}`), '');
+  console.log(out.join('\n').trimEnd());
 }
 
 async function cmdMedia({ pos, flags }) {
@@ -811,7 +835,8 @@ async function cmdSend({ pos, flags }) {
   refuseLineChat(chat);
   if (flags.list !== undefined && (flags.text !== undefined || flags['text-file'] !== undefined)) throw new UsageError('Give one --text with --at or --in, or a --list, not both. Nothing was set.');
   const list = flags.list !== undefined ? readList(flags.list) : undefined;
-  const text = list === undefined ? textFrom(flags) : undefined;
+  if (flags.file !== undefined && (timed || flags.until !== undefined)) throw new UsageError('File sends go now. Timed file sends are not supported. Nothing was sent.');
+  const text = list === undefined ? flags.file !== undefined && flags.text === undefined && flags['text-file'] === undefined ? '' : textFrom(flags) : undefined;
   const contacts = await loadContacts();
   const verb = timed ? 'set' : 'sent';
   const gaps = text === undefined ? [] : gapsIn(text);
@@ -854,7 +879,7 @@ async function cmdSend({ pos, flags }) {
   // records it, and checks the chat again right before the one request. It never falls back to
   // sending here (docs/plans/one-agent.md, part 6; ADR 0110). --until reaches only the app, which
   // holds a message the locked Mac can't send until then (ADR 0124).
-  const routed = await throughCompanion('send', { chatID: chat.id, text, after: newest ? newest.id : 'none', ...(body.replyToMessageID ? { replyTo: body.replyToMessageID } : {}),
+  const routed = await throughCompanion('send', { chatID: chat.id, text, ...(flags.file !== undefined ? { file: resolve(flags.file) } : {}), after: newest ? newest.id : 'none', ...(body.replyToMessageID ? { replyTo: body.replyToMessageID } : {}),
     ...(flags.until !== undefined ? { until: flags.until } : {}) });
   if (routed) {
     const { lines, exitCode } = routed.app.deliveryLines('send', routed.outcome, { label: label(chat, contacts), alias: messageAlias });
@@ -862,6 +887,7 @@ async function cmdSend({ pos, flags }) {
     if (exitCode) process.exitCode = exitCode;
     return;
   }
+  if (flags.file !== undefined) throw new UsageError('Open Beeper Companion to send files through its guarded send path. Nothing was sent.');
   const res = await apiOnce('POST', `/v1/chats/${encodeURIComponent(chat.id)}/messages`, body);
   const failure = res.ok ? null : new BeeperError(res.error);
   const found = await verifyOutgoing(chat, text, before);
@@ -1188,6 +1214,8 @@ Read
                                       Needs Beeper Companion running
   search <words> [--chat <chat>] [--from me|them] [--media image] [--days N] [--max 20]
                                       messages that contain these words, across all chats
+  search --opens-group [<words>] [--members N] [--days N] [--max 20]
+                                      the Owner's first message in each group they opened, newest first
   media <chat> <message>              put a message's photos and files on this Mac, and print where
 
 Triage state
@@ -1225,8 +1253,9 @@ Change the running Companion when the Owner says to. Full mode only, except app 
                                       --text-first lets it text first when the Chat goes quiet
   app auto pick <chatID> <1|2|3|auto> pick one of its approaches, or let it choose
   app auto go <chatID>                Auto takes its next move there, once this Ask ends
-  app instruction <chatID> <chat|person>
-                                      save the Owner's words of this Companion run as a standing instruction
+  app instruction <chatID> <chat|person|global>
+                                      save the Owner's words of this Companion run as a standing instruction;
+                                      global only when their words say all replies, all chats, or everywhere
   app remember <chatID> <who|now|you|talk|history> <fact…>
                                       save a fact the Owner told this Companion run about that Chat's person, as the Owner's line in their Person File
   app forget <chatID> <fact…>         take back a fact the Owner told the agent, when this Companion run's words say it is wrong
@@ -1243,7 +1272,7 @@ Change the running Companion when the Owner says to. Full mode only, except app 
             [--until <time>] --note "…" [--confirmed]
                                       wake a fresh run later about that Chat, or about none. Times are ISO with a zone.
                                       --send only when the Owner's words said to send then; from a terminal it needs --confirmed
-  app later <chatID|none> --every <day|weekday|weekend|mon,wed,…> --time <HH:MM> [--send] [--until <time>] --note "…" [--confirmed]
+  app later <chatID|none> --every <12h|30m|day|weekday|weekend|mon,wed,…> [--time <HH:MM>] [--send] [--until <time>] --note "…" [--confirmed]
                                       a repeating Look-again: a fresh run on those days at that time, in this Mac's zone,
                                       until it is stopped or --until
   app later stop <requestID|all>      stop a request and every Look-again, repeat, and Timed send under it, or every one
@@ -1253,6 +1282,8 @@ Change the running Companion when the Owner says to. Full mode only, except app 
 Write, needs --confirmed after the Owner says yes
   same <person> <person>              record the Owner's word that two people from who are one person
   different <person> <person>         or that they are different people
+  send <chat> --file <path> [--text "caption"] --after <message> [--reply-to <message>]
+                                      sends a local file or image through Beeper Companion, up to 50 MB
   send <chat> --text "…" --after <message> [--reply-to <message>] [--until <time>]
                                       --until: how long a message waits while the Mac is locked, at most 24 hours
   send <chat> --text "…" (--at <time> | --in <20m|2h|3d>) --after <message> [--until <time>] [--reply-to <message>]
@@ -1297,6 +1328,10 @@ const ALLOWED = {
   readonly: new Set(['check', 'accounts', 'mode', 'triage', 'chat', 'find', 'who', 'mind', 'people', 'trends', 'search', 'media', 'dismiss', 'undismiss', 'notes', 'playbook', 'app status', 'app replies', 'app voice', 'app auto list', 'app line']),
   drafts: new Set(['check', 'accounts', 'mode', 'triage', 'chat', 'find', 'who', 'mind', 'people', 'trends', 'search', 'media', 'draft', 'suggest', 'notes', 'note', 'playbook', 'learn', 'app status', 'app replies', 'app chat', 'app voice', 'app timeline', 'app auto list', 'app auto off', 'app line', 'app intros', 'app intro prepare', 'app coordinations', 'app round prepare', 'app coordination end', 'app later list', 'app later stop', 'app runs', 'app quiet', 'app quiet off']),
 };
+// Inside a Companion run, readonly may also read the run's Chat record, and save and list Intro cards,
+// which send nothing: the app lets only an Intro request's run save one there, and refuses every
+// other run (ADR 0268).
+const READONLY_IN_RUN = new Set(['app chat', 'app intro prepare', 'app intros']);
 // modes: an Owner action's own (lib/actions.mjs), from a terminal and inside a Companion run.
 function refuseByMode(name, modes) {
   const mode = currentMode();
@@ -1305,7 +1340,7 @@ function refuseByMode(name, modes) {
     if (mode === 'readonly') throw new UsageError(`Read-only mode is on, so "${name}" did not run and nothing changed. Tell the Owner. Only they can loosen the mode.`);
     throw new UsageError(`Drafts-only mode is on, so "${name}" did not run and nothing changed. This run may read and save drafts. Anything else waits for the Owner.`);
   }
-  if (mode === 'readonly' && !ALLOWED.readonly.has(name) && !(name === 'app chat' && process.env.COMPANION_RUN)) {
+  if (mode === 'readonly' && !ALLOWED.readonly.has(name) && !(READONLY_IN_RUN.has(name) && process.env.COMPANION_RUN)) {
     throw new UsageError(`Read-only mode is on, so "${name}" did not run and nothing changed. Tell the Owner. Only they can loosen the mode.`);
   }
   if (mode === 'drafts' && !ALLOWED.drafts.has(name)) {
@@ -1353,7 +1388,7 @@ const WRITE_ARGS = {
   mode: [1, ''], dismiss: [1, ''], undismiss: [1, ''], same: [2, 'confirmed'], different: [2, 'confirmed'],
   note: [1, 'text text-file from by delete'], learn: [1, 'text why by'], draft: [1, 'text text-file replace'],
   suggest: [1, 'text text-file steps agent after'],
-  send: [1, 'text text-file after reply-to confirmed at in until list every'], read: [1, ''], react: [3, 'confirmed'],
+  send: [1, 'file text text-file after reply-to confirmed at in until list every'], read: [1, ''], react: [3, 'confirmed'],
   remind: [1, 'when dismiss-on-message'], unremind: [1, ''], edit: [2, 'text text-file confirmed'],
   delete: [2, 'for-everyone confirmed'], contact: [1, 'first last handle confirmed'],
   group: [0, 'from title text text-file intro confirmed'], start: [0, 'to account confirmed'],

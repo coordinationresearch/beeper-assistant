@@ -7,8 +7,8 @@ import { htmlToText, looksLikeAck } from './triage.mjs';
 
 export const CLASSES = ['urgent', 'waiting', 'unsure', 'nothing'];
 export const WANTS = ['ask', 'plan', 'news', 'fyi', 'pleasantry', 'pitch'];
-const HOUR = 3_600_000;
-const DAY = 24 * HOUR;
+export const HOUR = 3_600_000;
+export const DAY = 24 * HOUR;
 
 // ---- Closeness ----
 // From counts of what the Owner and the Chat have written, read from files on this Mac.
@@ -35,7 +35,7 @@ const PLAN = /\b(lunch|dinner|coffee|drinks?|breakfast|brunch|hang|meet( up)?|ca
 // A thanks or sign-off with a few more words: "Sounds good, let's do the cafe!", "Yup that works!".
 const CLOSER = /\b(thanks?|thank (you|u)|thx|ty|appreciate (it|you|that)|sounds (good|great|perfect)|that works|works for me|see (you|u|ya)|cya|talk soon|ttyl|will do|i'?ll be there|will follow up|looking forward|can'?t wait|love (it|that|this|to)|congrats|no worries|no problem|all good|have fun|enjoy|good luck|will hang|perfect|awesome|amazing|hilarious|haha+|lol+|lmao)\b/i;
 const PITCH = /\b(thanks? (you )?for (connecting|the connection|accepting)|nice to (connect|be connected)|came across your (profile|work)|wanted to connect|reach(ing)? out (to|regarding|about)|would love to (connect|chat|show|share|hop)|our (team|company|platform|product|agency|clients?)|opportunit(y|ies)|partnership|collaborat|book a (call|demo)|demo\b|happy to share|we help|i help\b|i lead\b|invite you to|sign up|register\b|webinar|free trial|boost your|media opportunit|press|sponsor)/i;
-// A day named in a plan. SKILL.md already puts anything due in the next three days first.
+// A day named in a plan, inside 72h: the only deadline the rules see, so it counts as cost of delay.
 const SOON = /\b(today|tonight|tomorrow|tmrw|this (morning|afternoon|evening|week|weekend)|(mon|tues|wednes|thurs|fri|satur|sun)day)\b/i;
 // Short hype with nothing to answer: "Yooo / That's wild".
 const HYPE = /\b(ay+|yo+|sick|dope|lit|fire|nice|cool|wow|omg|insane|crazy|wild|legend|hell yeah|let'?s go+|so good|love (it|that|this))\b/i;
@@ -167,7 +167,7 @@ export function rankRow(r, { now = Date.now(), stats = null, stranger = null, ju
     if (s !== null) add('stranger-rate', Math.max(-6, Math.min(6, Math.round((s - 0.3) * 20))));
   }
   if (markedByOwner(r)) add('marked-unread', 15);
-  if (r.mentions) add('mentions', Math.min(10, 5 * r.mentions));
+  if (r.mentions && r.type === 'group') add('mentions', Math.min(10, 5 * r.mentions));
   // Fresh messages rank higher and fade over two days. A first version gave points for waiting
   // instead, and the replay showed the Owner answers fresh messages: it ranked worse than newest
   // first. The Reason still counts the wait from the first unanswered message. A stranger's
@@ -175,7 +175,7 @@ export function rankRow(r, { now = Date.now(), stats = null, stranger = null, ju
   if (knows) add('fresh', Math.max(0, 12 - Math.floor(r.ageMs / HOUR / 4)));
   else add('stale', -Math.min(10, Math.floor(r.ageMs / DAY)));
   if ((r.messages || 0) >= 3) add('several', 2);
-  if (r.hasDraft) add('draft', -3);
+  if (r.hasDraft) add('draft', 3);
   // Someone the Owner seldom answers drops out of waiting. Never out of urgent.
   if (cls === 'waiting' && share !== null && share < 0.2 && stats.runs >= 5 && !markedByOwner(r)) { cls = 'unsure'; cause = 'low-answer-rate'; }
   // Then a Chat that holds a Dropped item is at least waiting, whoever spoke last and whatever the
@@ -197,6 +197,72 @@ export function compareRanked(a, b) {
   return (CLASSES.indexOf(a.rank.class) - CLASSES.indexOf(b.rank.class)) || (b.rank.score - a.rank.score) || (a.ageMs - b.ageMs);
 }
 
+// ---- Today's Bands (ADR 0263) ----
+export const SLIP_FLOOR_MS = 2 * DAY;
+export const MUST_WAIT_MS = 7 * DAY;
+export const SOON_WINDOW_MS = 72 * HOUR;
+export const PACE_MIN_REPLIES = 5;
+
+// End of the Mac's local calendar day holding `now`, as ms. Local Date setters, not UTC.
+export function endOfLocalDay(now) {
+  const d = new Date(now);
+  d.setHours(24, 0, 0, 0);
+  return d.getTime();
+}
+
+// How long a Chat may wait before it is Slipping: the Owner's p90 first reply to this Person
+// once five replies are on record, never under the floor. Groups and thin history get the floor.
+export function slipLineMs(r, pace) {
+  if (r.type !== 'group' && pace && pace.replied >= PACE_MIN_REPLIES && pace.p90Ms) return Math.max(SLIP_FLOOR_MS, pace.p90Ms);
+  return SLIP_FLOOR_MS;
+}
+
+// The Band a ranked row takes in Today (ADR 0263). Null for any class but urgent and waiting.
+// Only a Judgment's urgent is Must: a Chat the rules alone made urgent sits in Should until a
+// verdict confirms it, so the red icon stays Judgment-only (ADR 0032).
+// deadline: ISO string or null. dayEnd: endOfLocalDay(now) unless injected.
+export function bandOf(r, { now, pace = null, deadline = null, dayEnd = endOfLocalDay(now) }) {
+  const cls = r.rank.class;
+  if (cls !== 'urgent' && cls !== 'waiting') return { band: null, slipping: false, waitedMs: 0, lineMs: slipLineMs(r, pace) };
+  // A Chat the Owner wrote last is here by a mark or a Dropped item; it has no wait and never slips.
+  const waitedMs = r.lastFrom === 'me' ? 0 : Math.max(0, now - waitStart(r, now));
+  const due = deadline ? Date.parse(deadline) : NaN;
+  const lineMs = slipLineMs(r, pace);
+  const slipping = waitedMs >= lineMs;
+  let band = 'rest';
+  if (cls === 'urgent' && r.rank.judged) band = 'must';
+  else if (Number.isFinite(due) && due < dayEnd) band = 'must';
+  else if (waitedMs >= MUST_WAIT_MS) band = 'must';
+  else if (slipping) band = 'should';
+  else if (Number.isFinite(due) && due < now + SOON_WINDOW_MS) band = 'should';
+  else if (markedByOwner(r)) band = 'should';
+  else if (cls === 'urgent') band = 'should';
+  return { band, slipping, waitedMs, lineMs };
+}
+
+// Today's order inside a Band. Must: Urgent with no deadline first, then by deadline
+// ascending, then undated musts (the seven-day waiters) longest wait first. Should: by
+// waitedMs/lineMs descending. The rest by waitedMs descending. Ties: newest first.
+export function compareToday(a, b) {
+  const bandAt = (r) => { const i = BANDS.indexOf(r.rank.band); return i < 0 ? BANDS.length : i; };
+  const d = bandAt(a) - bandAt(b);
+  if (d) return d;
+  if (a.rank.band === 'must') {
+    const dueA = Date.parse(a.rank.deadline ?? ''), dueB = Date.parse(b.rank.deadline ?? '');
+    const openA = a.rank.class === 'urgent' && !Number.isFinite(dueA), openB = b.rank.class === 'urgent' && !Number.isFinite(dueB);
+    if (openA !== openB) return openA ? -1 : 1;
+    const datedA = Number.isFinite(dueA), datedB = Number.isFinite(dueB);
+    if (datedA !== datedB) return datedA ? -1 : 1;
+    if (datedA) return (dueA - dueB) || (a.ageMs - b.ageMs);
+    return (b.rank.waitedMs - a.rank.waitedMs) || (a.ageMs - b.ageMs);
+  }
+  if (a.rank.band === 'should') {
+    return (b.rank.waitedMs / b.rank.lineMs) - (a.rank.waitedMs / a.rank.lineMs) || (a.ageMs - b.ageMs);
+  }
+  return (b.rank.waitedMs - a.rank.waitedMs) || (a.ageMs - b.ageMs);
+}
+const BANDS = ['must', 'should', 'rest'];
+
 // ---- Reason ----
 const WANT_WORDS = {
   ask: 'Asked you something', plan: 'Making plans', news: 'Shared news', fyi: 'Sent something to look at',
@@ -212,7 +278,7 @@ export function compactCount(n) {
 export function closenessWords(r, stats, now = Date.now()) {
   if (r.type === 'group') {
     if (!stats) return '';
-    return stats.owner90 >= 10 ? 'a group you write in' : stats.owner > 0 ? 'a group you rarely write in' : 'a group you never write in';
+    return stats.owner90 >= 10 ? 'a group you write in' : stats.owner > 0 ? 'a group you have written in' : 'a group you never write in';
   }
   if (r.closeness === 'unknown') return 'no history on this Mac';
   if (!stats) return r.closeness === 'light' ? 'you have written here' : r.closeness === 'known' ? 'in your Contacts' : '';
@@ -291,8 +357,9 @@ export function reasonFor(r, { stats = null, stranger = null, now = Date.now() }
 
 // Sets each row's Closeness, want, and cues, then ranks and sorts the rows in place.
 // `stats` maps Chat id to counts and answer rate; `strangers` maps an account key to the
-// answer rate for strangers there; `judgments` maps Chat id to a model's read.
-export function rankRows(rows, { now = Date.now(), stats = new Map(), strangers = new Map(), strangerKey = () => '', judgments = new Map() } = {}) {
+// answer rate for strangers there; `judgments` maps Chat id to a model's read. `pace` maps
+// Chat id to { p90Ms, replied }, the Owner's reply pace with that Person, for the Band.
+export function rankRows(rows, { now = Date.now(), stats = new Map(), strangers = new Map(), strangerKey = () => '', judgments = new Map(), pace = new Map(), dayEnd = endOfLocalDay(now) } = {}) {
   for (const r of rows) {
     const s = stats.get(r.id) || null;
     // With the Owner speaking last there is no run of theirs to read; the preview is the Owner's.
@@ -303,7 +370,10 @@ export function rankRows(rows, { now = Date.now(), stats = new Map(), strangers 
     r.soonCue = SOON.test(texts.join(' / '));
     r.endsInQuestion = QUESTION.test(htmlToText(texts[texts.length - 1] || ''));
     const stranger = strangers.get(strangerKey(r)) || null;
-    rankRow(r, { now, stats: s, stranger, judgment: judgments.get(r.id) || null });
+    const judgment = judgments.get(r.id) || null;
+    rankRow(r, { now, stats: s, stranger, judgment });
+    r.rank.deadline = judgment && judgment.owed !== 'no' && typeof judgment.deadline === 'string' ? judgment.deadline : null;
+    Object.assign(r.rank, bandOf(r, { now, pace: pace.get(r.id) || null, deadline: r.rank.deadline, dayEnd }));
     r.rank.reason = reasonFor(r, { stats: s, stranger, now });
     if (s) r.history = { messages: s.messages, owner: s.owner, owner90: s.owner90, ownerWeeks26: s.ownerWeeks26, first: s.first, runs: s.runs, answered: s.answered, source: s.source };
   }

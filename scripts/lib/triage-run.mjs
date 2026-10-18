@@ -18,6 +18,8 @@ export const MAX_READ_GROUPS = 100;
 //   messages(chatID, limit) -> recent messages, newest last
 //   history(chats) -> { stats: Map<chatID, counts and answer rate>, problems }, optional
 //   strangers() -> Map<account key, { chats, answered }>, optional
+//   pace(chatIDs) -> Map<chatID, { p90Ms, replied }>, optional: the Owner's reply pace with each
+//     Person, for the Bands (ADR 0263). `ba triage` passes none, so every Chat slips on the floor.
 //   dropped() -> Map<chatID, { kind, why, at }>, optional: Chats that hold a Dropped item
 //     (ADR 0081), which the list keeps whoever spoke last and however old. The companion
 //     passes them while its Preview is on; `ba triage` passes none.
@@ -81,16 +83,19 @@ export async function collectTriage(reads, { now = Date.now(), windowDays = DEFA
   filterTriage(t);
   const rows = [...t.people, ...t.groups];
   t.history = { available: false, problems: [] };
-  const [history, strangers] = await Promise.all([
+  const [history, strangers, pace] = await Promise.all([
     reads.history ? reads.history(rows.map((r) => ({ id: r.id, messageIDs: [...new Set([r.lastMessageID, r.newestID, ...(r.runIDs || [])].filter(Boolean))] }))).catch((e) => ({ stats: new Map(), problems: [e && e.message ? e.message : String(e)] })) : null,
     reads.strangers ? reads.strangers().catch(() => new Map()) : new Map(),
+    // The Owner's reply pace per Chat, for the Bands (ADR 0263). `ba triage` has no pace
+    // reader, so it slips on the 48h floor alone; a failed read is no pace.
+    reads.pace ? Promise.resolve().then(() => reads.pace(rows.map((r) => r.id))).then((m) => new Map(m), () => new Map()) : new Map(),
   ]);
   const stats = history ? history.stats : new Map();
   if (history) t.history = { available: true, problems: history.problems || [] };
   // A group's page may hold nothing of the Owner's though they write there: the Mac's history counts
   // it, so the group is no stranger's room (ADR 0086, never a stranger).
   for (const r of t.groups) if (Number(stats.get(r.id)?.owner) > 0) r.ownerSpoke = true;
-  const opts = { now, stats, strangers, strangerKey };
+  const opts = { now, stats, strangers, strangerKey, pace };
   // A first pass by rules, so a judge sees each row's Closeness and want.
   rankRows(rows, opts);
   if (judge) {

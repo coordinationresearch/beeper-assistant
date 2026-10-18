@@ -358,9 +358,9 @@ test('modes: a late run (drafts) may never set or resume a repeat; readonly may 
 test('help and the usage name both new commands', async () => {
   const help = await ba('ba.mjs', process.env, ['help']);
   assert.equal(help.status, 0);
-  assert.match(help.stdout, /app later <chatID\|none> --every <day\|weekday\|weekend\|mon,wed,…> --time <HH:MM> \[--send\] \[--until <time>\] --note "…" \[--confirmed\]/);
+  assert.match(help.stdout, /app later <chatID\|none> --every <12h\|30m\|day\|weekday\|weekend\|mon,wed,…> \[--time <HH:MM>\] \[--send\] \[--until <time>\] --note "…" \[--confirmed\]/);
   assert.match(help.stdout, /app later resume <requestID> {8}start a paused repeat again, on the Owner's "keep going"/);
-  assert.throws(() => appCommand(['later'], run), /\n {2}ba app later <chatID\|none> --every <day\|weekday\|weekend\|mon,wed,…> --time <HH:MM>.*\n {2}ba app later list\n {2}ba app later stop <requestID\|all>\n {2}ba app later resume <requestID>\n/s);
+  assert.throws(() => appCommand(['later'], run), /\n {2}ba app later <chatID\|none> --every <12h\|30m\|day\|weekday\|weekend\|mon,wed,…> \[--time <HH:MM>\].*\n {2}ba app later list\n {2}ba app later stop <requestID\|all>\n {2}ba app later resume <requestID>\n/s);
 });
 
 // The CLI's output points the agent at these sentences, so they must stay where it points.
@@ -368,7 +368,7 @@ test('later.md and line.md hold the sentences the repeat output points to', () =
   const read = (file) => readFileSync(join(SKILL, ...file.split('/')), 'utf8');
   const later = read('references/later.md'), line = read('references/line.md'), skill = read('SKILL.md');
   for (const words of [
-    'ba app later <chatID|none> --every <day|weekday|weekend|mon,wed,…> --time <HH:MM> [--send] [--until <time>] --note "<text>" [--confirmed]',
+    'ba app later <chatID|none> --every <12h|30m|day|weekday|weekend|mon,wed,…> [--time <HH:MM>] [--send] [--until <time>] --note "<text>" [--confirmed]',
     '`--every` takes no `--at`, `--in`, `--when-they-write`, or `--unless-answered`.',
     'From a terminal, `--send` also needs `--confirmed`.',
     'A repeat about no Chat only tells the Owner.',
@@ -384,7 +384,7 @@ test('later.md and line.md hold the sentences the repeat output points to', () =
     'Never copy an earlier firing\'s text.',
     'A late firing tells what it would have done, in one line, and never sends.',
     'Never set another Look-again to stand in for the schedule, and never change the schedule.',
-    'anything that repeats by the hour or minute',
+    'For "every 12 hours", use `--every 12h`, with no `--time`.',
   ]) assert.ok(later.includes(words), `later.md: ${words}`);
   // The CLI's own unsupported sentence carries the words later.md tells the agent to look for.
   assert.ok(UNSUPPORTED.includes('older than repeating Look-agains'));
@@ -403,10 +403,25 @@ test('later.md and line.md hold the sentences the repeat output points to', () =
   assert.match(rows[stop], /`ba app later stop <requestID>` for that paused repeat only\./);
   for (const words of [
     'The first two rows answer a repeat\'s pause report and come before every other row',
-    'Add one line per repeat: the first name, or no Chat, its days and time, whether it sends or only tells, and "paused" when it is.',
+    'Add one line per repeat: the first name, or no Chat, its interval or days and time, whether it sends or only tells, and "paused" when it is.',
     'setting or resuming one doesn\'t',
   ]) assert.ok(line.includes(words), `line.md: ${words}`);
 
   assert.ok(skill.includes('`ba app later <chat|none> --every <days> --time <HH:MM>`'));
   assert.equal(skill.includes('such as a repeating message'), false);
+});
+
+test('an interval sends the exact request, prints its cadence, and requires the interval capability', async t => {
+  keepExitCode(t);
+  const args = ['later', CHAT, '--every', '12h', '--send', '--confirmed', '--note', NOTE];
+  const plan = appCommand(args, terminal);
+  assert.deepEqual(plan.payload, { chatID: CHAT, every: '12h', send: true, confirmed: true, note: NOTE });
+  assert.equal(plan.interval, true);
+  const app = await fakeApp(t, { capabilities: ['later', 'repeat', 'repeat-interval'], answer: () => [200, { ...set, repeat: { ...repeat, every: '12h', time: null } }] });
+  assert.match((await printed(() => runApp(args, app.options))).join('\n'), /It fires every 12h/);
+  assert.deepEqual(app.requests.find(r => r.path === '/later').body, plan.payload);
+  const old = await fakeApp(t);
+  await assert.rejects(runApp(args, old.options), /Update Beeper Companion to use repeating intervals/);
+  assert.equal(old.requests.some(r => r.path === '/later'), false);
+  assert.throws(() => appCommand([...args, '--time', '08:00'], terminal), /--time goes with calendar days/);
 });

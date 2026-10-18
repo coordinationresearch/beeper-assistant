@@ -107,7 +107,24 @@ function rowLines(item, now) {
 export function renderCatchUp(record, now = Date.now()) {
   const items = record.items;
   const out = [`CATCH UP · from Beeper Companion${record.checkedAt ? ` · checked ${since(record.checkedAt, now)}` : ''} · ${plural(items.length, 'item')} · already ranked, in the Owner's order`, UNTRUSTED_NOTE];
+  // A record whose triage rows carry a Band (ADR 0263) prints under Today's headings: Must, Should,
+  // the rest owed, then Unsure on its own. One from an older Companion keeps URGENT and WAITING.
+  const triage = items.filter((i) => i.section === 'urgent' || i.section === 'waiting');
+  const banded = triage.some((i) => i.band !== undefined);
+  if (banded) {
+    for (const [title, rows] of [
+      ['MUST: get to today', triage.filter((i) => !i.unsure && i.band === 'must')],
+      ['SHOULD: slipping or due soon', triage.filter((i) => !i.unsure && i.band === 'should')],
+      ['ALSO OWED', triage.filter((i) => !i.unsure && i.band !== 'must' && i.band !== 'should')],
+      ['UNSURE: only you can tell', triage.filter((i) => i.unsure === true)],
+    ]) {
+      if (!rows.length) continue;
+      out.push('', `${title} (${rows.length})`);
+      for (const item of rows) out.push(...rowLines(item, now));
+    }
+  }
   for (const section of Object.keys(TITLES)) {
+    if (banded && (section === 'urgent' || section === 'waiting')) continue;
     const rows = items.filter((item) => item.section === section);
     if (!rows.length) continue;
     out.push('', `${TITLES[section]} (${rows.length})`);

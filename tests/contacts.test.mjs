@@ -35,6 +35,24 @@ test('ambiguous and unknown handles return nothing', () => {
   assert.equal(nameFor(null, '+15550100001'), null);
 });
 
+test('case-only duplicate names resolve for display while card ownership stays distinct', () => {
+  const idx = buildIndex([
+    { first: 'JD', last: 'Example', value: '+15550100008', kind: 'phone' },
+    { first: 'Jd', last: 'Example', value: '+15550100008', kind: 'phone' },
+    { first: 'JD', last: 'Example', value: 'jd@example.com', kind: 'email' },
+    { first: 'Jd', last: 'Example', value: 'jd@example.com', kind: 'email' },
+    ...CONTACT_ROWS,
+  ]);
+  assert.equal(nameFor(idx, '+15550100008'), 'JD Example');
+  assert.equal(nameFor(idx, '+995550100008'), 'JD Example', 'last-ten-digit display lookup also ignores case');
+  assert.equal(nameFor(idx, 'JD@example.com'), 'JD Example');
+  assert.equal(nameFor(idx, '+15550100009'), null, 'different names stay ambiguous');
+  assert.deepEqual(ownersOf(idx, '+15550100008'), ['JD Example', 'Jd Example']);
+  assert.deepEqual(exactOwners(idx, 'jd@example.com'), [
+    { name: 'JD Example', organizations: [] }, { name: 'Jd Example', organizations: [] },
+  ]);
+});
+
 test('very short numbers never match by accident', () => {
   assert.equal(nameFor(index, '0001'), null);
 });

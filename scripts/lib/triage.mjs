@@ -97,16 +97,31 @@ export function handlesOf(chat) {
 }
 
 export function chatName(chat, contacts) {
-  const title = String(chat.title || '').trim();
-  if (isGroup(chat)) {
-    if (title && !handleLike(title)) return { name: title, resolved: true };
-    const names = counterparties(chat).slice(0, 4).map((p) => personName(p, contacts));
-    const extra = participantTotal(chat) - 1 - names.length;
+  const title = typeof chat.title === 'string' ? chat.title.trim() : '';
+  // Search results may omit display metadata. Read only usable name fields; this never
+  // changes the original Chat or the member evidence that writes check.
+  const members = participantsOf(chat).filter(p => p && typeof p === 'object').map(p => ({
+    isSelf: p.isSelf === true,
+    id: typeof p.id === 'string' ? p.id : '',
+    fullName: typeof p.fullName === 'string' ? p.fullName : '',
+    phoneNumber: typeof p.phoneNumber === 'string' ? p.phoneNumber : '',
+    email: typeof p.email === 'string' ? p.email : '',
+    username: typeof p.username === 'string' ? p.username : '',
+  })).filter(p => p.isSelf || p.id || p.fullName || p.phoneNumber || p.email || p.username);
+  const others = members.filter(p => !p.isSelf);
+  if (chat.type === 'group') {
+    // Beeper also supplies untitled groups as a list of numbers or emails.
+    const handlesTitle = title.split(/,?\s+(?:&|and)\s+|,\s*/i).every(handleLike);
+    if (title && !handleLike(title) && !handlesTitle) return { name: title, resolved: true };
+    if (!others.length) return { name: title || '(group)', resolved: true };
+    const names = others.slice(0, 4).map((p) => personName(p, contacts));
+    const total = chat.participants?.total;
+    const extra = (Number.isSafeInteger(total) && total >= members.length ? total : members.length) - 1 - names.length;
     return { name: names.join(', ') + (extra > 0 ? ` +${extra}` : '') || '(group)', resolved: true };
   }
   if (title && !handleLike(title)) return { name: title, resolved: true };
-  const cp = counterparties(chat)[0] || {};
-  const handles = handlesOf(chat);
+  const cp = others[0] || {};
+  const handles = handlesOf({ ...chat, participants: members });
   for (const h of handles) {
     const found = nameFor(contacts, h);
     if (found) return { name: found, resolved: true, handle: h };

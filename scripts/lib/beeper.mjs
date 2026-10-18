@@ -329,13 +329,13 @@ function broken(e, status) {
 // cancelled meanwhile never starts. A result with cancelled: true sent nothing.
 /**
  * @param {string} method @param {string} path @param {unknown} [body]
- * @param {{ timeoutMs?: number, before?: (() => boolean) | null }} [options]
+ * @param {{ timeoutMs?: number, before?: (() => boolean | Promise<boolean>) | null }} [options]
  * @returns {Promise<any>}
  */
 export async function apiOnce(method, path, body, { timeoutMs = 60_000, before = null } = {}) {
   const kept = readLogin();
   const used = await kept;
-  if (before && !before()) return { ok: false, status: 0, error: 'Cancelled before sending', cancelled: true };
+  if (before && !await before()) return { ok: false, status: 0, error: 'Cancelled before sending', cancelled: true };
   let last = await attempt(used, method, path, body, timeoutMs);
   if (!last.untouched) return last.result;
   if (login === kept) login = null;
@@ -343,7 +343,7 @@ export async function apiOnce(method, path, body, { timeoutMs = 60_000, before =
   const fresh = await readLogin().catch(() => null);
   if (fresh && (fresh.token !== used.token || fresh.baseURL !== used.baseURL)) {
     // The first attempt provably did nothing, so a cancel here means nothing was sent.
-    if (before && !before()) return { ok: false, status: 0, error: 'Cancelled before sending', cancelled: true };
+    if (before && !await before()) return { ok: false, status: 0, error: 'Cancelled before sending', cancelled: true };
     last = await attempt(fresh, method, path, body, timeoutMs);
   }
   // The CLI saves its login at setup and never reads Beeper's again, so only setup fixes a refused token.

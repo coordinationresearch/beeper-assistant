@@ -53,7 +53,9 @@ test('each action\'s words make exactly its request, and anything else is its us
   assert.deepEqual(plan(['pause', 'off']), ['pause off', '/pause/off', {}]);
   assert.deepEqual(plan(['check', 'now']), ['check now', '/check-now', {}]);
   assert.deepEqual(plan(['keep', 'drafting']), ['keep drafting', '/keep-drafting', {}]);
+  assert.deepEqual(plan(['uninstall']), ['uninstall', '/uninstall', {}]);
   assert.deepEqual(plan(['reply', 'stop', SAM]), ['reply stop', '/reply/stop', { chatID: SAM }]);
+  assert.deepEqual(plan(['reply', 'leave', 'out', 'first', SAM]), ['reply leave out first', '/reply/leave-out-first', { chatID: SAM }]);
   assert.deepEqual(plan(['brief', SAM]), ['brief', '/brief', { chatID: SAM }]);
   assert.equal(appCommand(['brief', SAM]).timeoutMs, 10 * 60_000, 'a Brief is one agent call, which may run minutes');
   assert.deepEqual(plan(['sends']), ['sends', '/sends', {}]);
@@ -61,7 +63,7 @@ test('each action\'s words make exactly its request, and anything else is its us
   assert.deepEqual(plan(['send', 'settle', SAM, '12', '--went', '--message', 'm-9']), ['send settle', '/send/settle', { chatID: SAM, sendID: 12, went: true, messageID: 'm-9' }]);
   assert.deepEqual(plan(['send', 'settle', SAM, '12', '--went', '--confirmed']), ['send settle', '/send/settle', { chatID: SAM, sendID: 12, went: true, confirmed: true }]);
   assert.deepEqual(plan(['send', 'settle', SAM, '12', '--didnt', '--confirmed']), ['send settle', '/send/settle', { chatID: SAM, sendID: 12, went: false, confirmed: true }]);
-  for (const args of [['brief'], ['brief', 'Sam'], ['brief', SAM, SAM], ['pause', 'now'], ['pause', 'off', 'please'], ['check'], ['keep', 'drafting', 'today'], ['reply', 'stop'], ['reply', 'stop', 'Sam'], ['sends', 'Sam'],
+  for (const args of [['brief'], ['brief', 'Sam'], ['brief', SAM, SAM], ['pause', 'now'], ['pause', 'off', 'please'], ['check'], ['keep', 'drafting', 'today'], ['uninstall', 'now'], ['reply', 'stop'], ['reply', 'stop', 'Sam'], ['sends', 'Sam'],
     ['send', 'settle', SAM, '12'], ['send', 'settle', SAM, '12', '--went'], ['send', 'settle', SAM, '12', '--didnt'], ['send', 'settle', SAM, '12', '--didnt', '--message', 'm-9', '--confirmed'],
     ['send', 'settle', SAM, 'x12', '--went', '--confirmed'], ['send', 'settle', SAM, '12', '--went', '--didnt', '--confirmed'], ['send', 'settle', 'Sam', '12', '--went', '--confirmed']])
     assert.throws(() => appCommand(args), /Usage:/, args.join(' '));
@@ -70,7 +72,7 @@ test('each action\'s words make exactly its request, and anything else is its us
 
 test('each runs in its own modes, checked before anything connects: stopping in drafts too, reading in readonly too', async t => {
   const app = await fakeApp(t);
-  const cases = [[['pause'], 'drafts', 0], [['pause', 'off'], 'drafts', 2], [['check', 'now'], 'drafts', 2], [['keep', 'drafting'], 'drafts', 2], [['reply', 'stop', SAM], 'drafts', 0], [['brief', SAM], 'drafts', 0], [['brief', SAM], 'readonly', 2],
+  const cases = [[['pause'], 'drafts', 0], [['pause', 'off'], 'drafts', 2], [['check', 'now'], 'drafts', 2], [['keep', 'drafting'], 'drafts', 2], [['uninstall'], 'drafts', 2], [['reply', 'stop', SAM], 'drafts', 0], [['brief', SAM], 'drafts', 0], [['brief', SAM], 'readonly', 2],
     [['sends'], 'readonly', 0], [['pause'], 'readonly', 2], [['send', 'settle', SAM, '3', '--went', '--confirmed'], 'drafts', 2]];
   for (const run of [{}, { COMPANION_RUN: 'run-fixture' }]) for (const [args, mode, status] of cases) {
     app.requests.length = 0;
@@ -102,4 +104,137 @@ test('an older Companion without the action says it needs an update, and asks no
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /APP_CLI_UNSUPPORTED: This Beeper Companion is older than that command/);
   assert.deepEqual(app.requests.map(q => q.path), ['/metadata']);
+});
+
+test('contact choices use exact Chats, and saving requires the Owner confirmation in full mode', async t => {
+  const plan = args => { const p = appCommand(args); return [p.command, p.path, p.payload]; };
+  const id = '11111111-1111-4111-8111-111111111111';
+  assert.deepEqual(plan(['contact', 'matches', SAM, '--search', 'Sam Reed']), ['contact matches', '/contact/matches', { chatID: SAM, search: 'Sam Reed' }]);
+  assert.deepEqual(plan(['contact', 'link', SAM, id, '--confirmed']), ['contact link', '/contact/link', { chatID: SAM, choiceID: id, confirmed: true }]);
+  for (const args of [['contact', 'matches', 'Sam'], ['contact', 'matches', SAM, '--search'], ['contact', 'link', SAM, id], ['contact', 'link', SAM, 'Sam', '--confirmed']])
+    assert.throws(() => appCommand(args), /Usage:/);
+  const app = await fakeApp(t);
+  for (const mode of ['drafts', 'readonly']) {
+    app.requests.length = 0;
+    const result = await ba(envFor(app, { BEEPER_ASSISTANT_MODE: mode }), ['app', 'contact', 'link', SAM, id, '--confirmed']);
+    assert.equal(result.status, 2); assert.deepEqual(app.requests, []);
+  }
+  const result = await ba(envFor(app, { BEEPER_ASSISTANT_MODE: 'readonly' }), ['app', 'contact', 'matches', SAM]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(app.requests.at(-1).body, { chatID: SAM, search: '' });
+});
+
+test('contact name editing round-trips names, rejects malformed saves and stays out of readonly runs', async t => {
+  const id = '11111111-1111-4111-8111-111111111111';
+  const args = ['contact', 'rename', SAM, id, '--first', 'Maya', '--last', 'de la Cruz', '--confirmed'];
+  assert.deepEqual(appCommand(args).payload, { chatID: SAM, editID: id, first: 'Maya', last: 'de la Cruz', confirmed: true });
+  assert.deepEqual(appCommand(['contact', 'name', SAM]).payload, { chatID: SAM });
+  for (const bad of [args.slice(0, -1), [...args.slice(0, 5), '\n', ...args.slice(6)], ['contact', 'name', 'Maya']]) assert.throws(() => appCommand(bad), /Usage:/);
+  const app = await fakeApp(t);
+  for (const mode of ['drafts', 'readonly']) {
+    const r = await ba(envFor(app, { BEEPER_ASSISTANT_MODE: mode }), ['app', ...args]); assert.equal(r.status, 2); assert.deepEqual(app.requests, []);
+  }
+  const r = await ba(envFor(app), ['app', ...args]); assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(app.requests.at(-1).body, appCommand(args).payload);
+});
+
+test('contact additions preserve the old CLI and round-trip optional fields without accepting extra flags', async t => {
+  const base = ['contact', 'rename', SAM, '11111111-1111-4111-8111-111111111111', '--first', 'Maya', '--last', 'Chen'];
+  const args = [...base, '--phone', '+1 555 010 0123', '--email', 'Maya+tag@example.test', '--confirmed'];
+  const payload = appCommand(args).payload;
+  assert.equal(payload.phone, '+1 555 010 0123'); assert.equal(payload.email, 'Maya+tag@example.test');
+  for (const tail of [['--phone', '--confirmed'], ['--email', 'a@example.test', '--email', 'b@example.test', '--confirmed'], ['--address', 'street', '--confirmed'], ['--phone', '123\n', '--confirmed']])
+    assert.throws(() => appCommand([...base, ...tail]), /Usage:/);
+  const app = await fakeApp(t), result = await ba(envFor(app), ['app', ...args]);
+  assert.equal(result.status, 0, result.stderr); assert.deepEqual(app.requests.at(-1).body, payload);
+});
+
+
+test('menu screening commands carry the issued row and version to their button handlers', async t => {
+  const app = await fakeApp(t);
+  for (const [words, path] of [[['mark', 'read'], '/menu/mark-read'], [['dismiss'], '/menu/dismiss']]) {
+    const result = await ba(envFor(app), ['app', 'menu', ...words, 'a'.repeat(16), 'b'.repeat(16)]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(app.requests.at(-1).body, { rowID: 'a'.repeat(16), version: 'b'.repeat(16) });
+    assert.equal(app.requests.at(-1).path, path);
+    assert.throws(() => appCommand(['menu', ...words, 'invalid', 'b'.repeat(16)]));
+  }
+});
+
+test('Diagnostics commands have specific mode authority, strict empty inputs, and no implicit retry', async t => {
+  const app = await fakeApp(t);
+  const cases = [
+    ['view', 'readonly', 0], ['view', 'drafts', 0], ['view', 'full', 0],
+    ['off', 'readonly', 2], ['off', 'drafts', 0], ['off', 'full', 0],
+    ['on', 'readonly', 2], ['on', 'drafts', 2], ['on', 'full', 0],
+    ['send', 'readonly', 2], ['send', 'drafts', 2], ['send', 'full', 0],
+  ];
+  assert.equal(appCommand(['diagnostics', 'send']).timeoutMs, 30_000);
+  assert.equal(appCommand(['diagnostics', 'view']).read, true);
+  for (const action of ['view', 'send', 'off', 'on']) {
+    assert.deepEqual(appCommand(['diagnostics', action]).payload, {});
+    assert.throws(() => appCommand(['diagnostics', action, '--settings', 'anything']), /Usage:/);
+  }
+  for (const run of [{}, { COMPANION_RUN: 'run-fixture' }]) for (const [action, mode, status] of cases) {
+    app.requests.length = 0;
+    const result = await ba(envFor(app, { BEEPER_ASSISTANT_MODE: mode, ...run }), ['app', 'diagnostics', action]);
+    assert.equal(result.status, status, `${action} in ${mode}: ${result.stderr}`);
+    if (status) assert.deepEqual(app.requests, [], 'mode refusal happens before connecting');
+    else assert.deepEqual(app.requests.map(r => [r.method, r.path]), [['GET', '/metadata'], ['POST', `/diagnostics/${action}`]], 'one request, never a retry');
+  }
+});
+
+test('Incident link copying validates its ID and requires an Owner write-capable mode', async t => {
+  const app = await fakeApp(t), id = '11111111-1111-4111-8111-111111111111';
+  assert.deepEqual(appCommand(['incident', 'copy', id]).payload, { id });
+  for (const args of [['incident', 'copy'], ['incident', 'copy', '../outside'], ['incident', 'copy', id, 'extra']])
+    assert.throws(() => appCommand(args), /Usage:/);
+  for (const mode of ['readonly', 'drafts', 'full']) {
+    app.requests.length = 0;
+    const result = await ba(envFor(app, { BEEPER_ASSISTANT_MODE: mode }), ['app', 'incident', 'copy', id]);
+    assert.equal(result.status, mode === 'readonly' ? 2 : 0, result.stderr);
+    assert.deepEqual(app.requests.map(r => [r.method, r.path]), mode === 'readonly' ? [] : [['GET', '/metadata'], ['POST', '/incident/copy']]);
+  }
+});
+
+test("a Person's File commands name a Person, a line, a loop, or an Undo by the ids person file gives, and the Owner's words need his word", async t => {
+  const plan = args => { const p = appCommand(args); return [p.command, p.path, p.payload]; };
+  assert.deepEqual(plan(['person', 'file', 'p_robin']), ['person file', '/person/file', { personID: 'p_robin' }]);
+  assert.deepEqual(plan(['person', 'line', 'edit', 'p_robin', 'f12', 'A neighbor', 'My cousin', '--confirmed']),
+    ['person line edit', '/person/line/edit', { personID: 'p_robin', lineID: 'f12', shown: 'A neighbor', text: 'My cousin', confirmed: true }]);
+  assert.deepEqual(plan(['person', 'line', 'remove', 'p_robin', 'f12', 'A neighbor', '--confirmed']), ['person line remove', '/person/line/remove', { personID: 'p_robin', lineID: 'f12', shown: 'A neighbor', confirmed: true }]);
+  assert.deepEqual(plan(['person', 'line', 'add', 'p_robin', 'who', 'My cousin', '--confirmed']), ['person line add', '/person/line/add', { personID: 'p_robin', part: 'who', text: 'My cousin', confirmed: true }]);
+  assert.deepEqual(plan(['person', 'line', 'undo', 'p_robin', 'u0123456789abcdef']), ['person line undo', '/person/line/undo', { personID: 'p_robin', undoID: 'u0123456789abcdef' }]);
+  assert.deepEqual(plan(['person', 'loop', 'done', 'p_robin', 'l_0123456789ab']), ['person loop done', '/person/loop/done', { personID: 'p_robin', loopID: 'l_0123456789ab' }]);
+  assert.deepEqual(plan(['person', 'write', 'p_robin']), ['person write', '/person/write', { personID: 'p_robin' }]);
+  assert.equal(appCommand(['person', 'write', 'p_robin']).timeoutMs, 10 * 60_000, 'a first build is one agent call, which may run minutes');
+  assert.deepEqual(plan(['note', 'delete', SAM, 'n0a0b0c0d']), ['note delete', '/note/delete', { chatID: SAM, noteID: 'n0a0b0c0d' }]);
+  for (const args of [['person', 'file'], ['person', 'file', 'p robin'], ['person', 'line', 'edit', 'p_robin', '12', 'A', 'B', '--confirmed'], ['person', 'line', 'edit', 'p_robin', 'f12', 'A', 'B'],
+    ['person', 'line', 'edit', 'p_robin', 'f12', 'A', '   ', '--confirmed'], ['person', 'line', 'edit', 'p_robin', 'f12', 'A', 'x'.repeat(501), '--confirmed'],
+    ['person', 'line', 'add', 'p_robin', 'feelings', 'x', '--confirmed'], ['person', 'line', 'remove', 'p_robin', 'f12', 'A'], ['person', 'loop', 'done', 'p_robin', 'f12'],
+    ['person', 'line', 'undo', 'p_robin', 'u1'], ['note', 'delete', 'Sam', 'n0a0b0c0d'], ['instruction', 'delete', 'i1'], ['instruction', 'edit', 'i1', 'new words']])
+    assert.throws(() => appCommand(args), /Usage:/, args.join(' '));
+  const app = await fakeApp(t);
+  const edit = ['person', 'line', 'edit', 'p_robin', 'f12', 'A neighbor', 'My cousin', '--confirmed'];
+  for (const mode of ['drafts', 'readonly']) {
+    app.requests.length = 0;
+    const r = await ba(envFor(app, { BEEPER_ASSISTANT_MODE: mode }), ['app', ...edit]);
+    assert.equal(r.status, 2); assert.deepEqual(app.requests, [], 'his words in his File are full mode only');
+  }
+  const read = await ba(envFor(app, { BEEPER_ASSISTANT_MODE: 'readonly' }), ['app', 'person', 'file', 'p_robin']);
+  assert.equal(read.status, 0, read.stderr);
+  const write = await ba(envFor(app, { BEEPER_ASSISTANT_MODE: 'drafts' }), ['app', 'person', 'write', 'p_robin']);
+  assert.equal(write.status, 0, write.stderr);
+  assert.deepEqual(app.requests.at(-1).body, { personID: 'p_robin' });
+});
+
+test('an instruction by its ID goes through the table, and the older save keeps its words and its refusal of flags', () => {
+  assert.deepEqual([appCommand(['instruction', 'edit', 'i0']).path, appCommand(['instruction', 'edit', 'i0']).payload], ['/instruction/edit', { id: 'i0' }]);
+  assert.deepEqual(appCommand(['instruction', 'undo', 'i0']).payload, { id: 'i0' });
+  assert.deepEqual(appCommand(['instruction', 'delete', 'i0', '--confirmed']).payload, { id: 'i0', confirmed: true });
+  assert.deepEqual([appCommand(['instruction', 'widen', 'i0', 'global']).path, appCommand(['instruction', 'widen', 'i0', 'global']).payload], ['/instruction/widen', { id: 'i0', scope: 'global' }]);
+  for (const args of [['instruction', 'widen', 'i0'], ['instruction', 'widen', 'i0', 'reply'], ['instruction', 'widen', 'i0', 'global', 'extra'], ['instruction', 'widen', 'i 0', 'global']])
+    assert.throws(() => appCommand(args), /Usage:/, args.join(' '));
+  assert.deepEqual(appCommand(['instruction', SAM, 'person']).payload, { chatID: SAM, scope: 'person' });
+  assert.throws(() => appCommand(['instruction', SAM, '--person']), /takes no flags|not supported/);
 });

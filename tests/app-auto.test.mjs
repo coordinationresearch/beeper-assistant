@@ -56,6 +56,7 @@ test('each app command is one exact request, worked out before anything connects
     'auto go': [['auto', 'go', CHAT], '/auto/go', { chatID: CHAT }],
     'instruction chat': [['instruction', CHAT, 'chat'], '/instruction', { chatID: CHAT, scope: 'chat' }],
     'instruction person': [['instruction', CHAT, 'person'], '/instruction', { chatID: CHAT, scope: 'person' }],
+    'instruction global': [['instruction', CHAT, 'global'], '/instruction', { chatID: CHAT, scope: 'global' }],
     'remember': [['remember', CHAT, 'who', 'Your', 'cousin'], '/remember', { chatID: CHAT, part: 'who', text: 'Your cousin' }],
     'forget': [['forget', CHAT, 'Your', 'cousin'], '/forget', { chatID: CHAT, text: 'Your cousin' }],
     'chat': [['chat', CHAT], '/chat', { chatID: CHAT }],
@@ -71,7 +72,7 @@ test('each app command is one exact request, worked out before anything connects
   assert.deepEqual(appCommand(['replies', '!fixture']), { command: 'replies', capability: 'replies', path: '/replies', payload: { chatID: '!fixture' } });
   for (const args of [[], ['auto'], ['auto', 'list', CHAT], ['auto', 'on'], ['auto', 'on', CHAT, CHAT], ['auto', 'off', CHAT, CHAT], ['auto', 'goal', CHAT],
     ['auto', 'goal', CHAT, '  '], ['auto', 'clear'], ['auto', 'pick', CHAT], ['auto', 'pick', CHAT, '0'], ['auto', 'pick', CHAT, '4'], ['auto', 'pick', CHAT, 'two'],
-    ['auto', 'pick', CHAT, '1', '2'], ['auto', 'pick', CHAT, ' 1'], ['auto', 'start', CHAT], ['auto', 'go'], ['auto', 'go', CHAT, CHAT], ['instruction', CHAT], ['instruction', CHAT, 'global'], ['instruction', CHAT, 'chat', 'extra'],
+    ['auto', 'pick', CHAT, '1', '2'], ['auto', 'pick', CHAT, ' 1'], ['auto', 'start', CHAT], ['auto', 'go'], ['auto', 'go', CHAT, CHAT], ['instruction', CHAT], ['instruction', CHAT, 'reply'], ['instruction', CHAT, 'chat', 'extra'],
     ['status', 'extra'], ['replies'], ['replies', '--confirmed'], ['chat', CHAT, CHAT], ['chat', '--json']]) {
     assert.throws(() => appCommand(args), /^Error: Usage:/, args.join(' '));
   }

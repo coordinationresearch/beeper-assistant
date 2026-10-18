@@ -59,6 +59,33 @@ test('the Catch up rows print with references the other commands take, and messa
   assert.deepEqual(json.items.map(i => [i.ref, i.chatID]), [[chatAlias(ANN), ANN], [chatAlias(BO), BO], [chatAlias(DEE), DEE], [chatAlias(CY), CY]]);
 });
 
+// A record from a Companion with the Triage Views: triage rows carry band and unsure, and print
+// under MUST, SHOULD, ALSO OWED, and UNSURE instead of URGENT and WAITING ON YOU (ADR 0263).
+const BANDED = {
+  ...RECORD,
+  items: [
+    { ...RECORD.items[0], band: 'must', unsure: false },
+    RECORD.items[1], RECORD.items[2],
+    { ...RECORD.items[3], band: 'rest', unsure: false },
+    { ...RECORD.items[3], chatID: 'imsg##thread:hal-invented', messageID: '$hal-1', name: 'Hal Invented', band: 'should', unsure: false },
+    { ...RECORD.items[3], chatID: '!str-invented:beeper.local', messageID: '$str-1', name: 'Stranger Invented', band: null, unsure: true },
+  ],
+};
+
+test('a record whose rows carry Bands prints under Today\'s four headings, Unsure on its own', () => {
+  const text = renderCatchUp(BANDED, NOW);
+  const lines = text.split('\n');
+  const at = (s) => lines.findIndex((l) => l.startsWith(s));
+  assert.ok(at('MUST: get to today (1)') > -1 && at('SHOULD: slipping or due soon (1)') > at('MUST')
+    && at('ALSO OWED (1)') > at('SHOULD') && at('UNSURE: only you can tell (1)') > at('ALSO OWED'), text);
+  assert.ok(at('MUST') < at('YOU DROPPED'), 'the owed rows still lead');
+  assert.equal(at('URGENT'), -1, 'the old headings give way');
+  const unsureLine = lines.findIndex((l) => l.includes('Stranger Invented'));
+  assert.ok(unsureLine > at('UNSURE'), 'a stranger never sits under a heading that says owed');
+  const json = catchUpJSON(BANDED);
+  assert.equal(json.items[0].band, 'must', 'the new fields pass --json through unchanged');
+});
+
 test('an answer whose rows are not the shape ba expects falls back instead of failing halfway', async () => {
   const read = (record) => async () => ({ record });
   for (const items of [[null], [{ section: 'urgent' }], [{ section: 'dropped', chatID: BO, name: 'Bo', network: 'x', why: 'y', receipt: RECORD.items[1].receipt }],

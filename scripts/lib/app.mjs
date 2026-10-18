@@ -9,7 +9,7 @@ import { isLineChat, stateDir } from './state.mjs';
 import { ACTIONS, actionFor } from './actions.mjs';
 
 export const appDiscoveryFile = (directory, dataHome) => join(directory, `app-${createHash('sha256').update(dataHome).digest('hex')}.json`);
-export const APP_CLI_OFF = 'The beeper-assistant skill is removed in Beeper Companion → Settings → Skill. Click Install there to use it again.';
+export const APP_CLI_OFF = 'The beeper-assistant skill is removed in Beeper Companion → Settings → Troubleshooting. Click Install there to use it again.';
 
 // A refusal prints a fixed sentence from here, never text the app sent. Codes in PASSED print as
 // they are; any other code prints APP_CLI_REFUSED.
@@ -90,7 +90,7 @@ export const APP_USAGE = `Usage:
   ba app auto clear <chatID>
   ba app auto pick <chatID> <1|2|3|auto>
   ba app auto go <chatID>
-  ba app instruction <chatID> <chat|person>
+  ba app instruction <chatID> <chat|person|global>
   ba app remember <chatID> <who|now|you|talk|history> <fact…>
   ba app forget <chatID> <fact…>
   ba app line [--before <messageID>] [--limit <1-100>]
@@ -102,7 +102,7 @@ export const APP_USAGE = `Usage:
   ba app round make <roundID>
   ba app coordination end <coordinationID|all> [--reached]
   ba app later <chatID|none> (--at <ISO time with zone> | --in <20m|2h|3d> | --when-they-write) [--unless-answered] [--send] [--until <ISO time with zone>] --note "…" [--confirmed]
-  ba app later <chatID|none> --every <day|weekday|weekend|mon,wed,…> --time <HH:MM> [--send] [--until <ISO time with zone>] --note "…" [--confirmed]
+  ba app later <chatID|none> --every <12h|30m|day|weekday|weekend|mon,wed,…> [--time <HH:MM>] [--send] [--until <ISO time with zone>] --note "…" [--confirmed]
   ba app later list
   ba app later stop <requestID|all>
   ba app later resume <requestID>
@@ -214,7 +214,9 @@ function laterCommand(rest, run) {
   // The app checks the days, the time, and the end itself.
   const repeat = flags.every !== undefined || flags.time !== undefined;
   if (repeat) {
-    if (flags.every === undefined || flags.time === undefined) no('Give --every and --time together, such as --every weekday --time 08:00.');
+    if (/^[1-9]\d*[mh]$/.test(flags.every ?? '')) {
+      if (flags.time !== undefined) no('--time goes with calendar days, not an interval.');
+    } else if (flags.every === undefined || flags.time === undefined) no('Give --every and --time together, such as --every weekday --time 08:00.');
     for (const f of NOT_WITH_EVERY) if (flags[f] !== undefined) no(`--every takes no --${f}. A repeat fires at --time on the days --every names.`);
   } else if (['at', 'in', 'when-they-write'].filter((f) => flags[f] !== undefined).length !== 1) no('Give exactly one of --at, --in, or --when-they-write.');
   for (const f of ['at', 'until']) if (flags[f] !== undefined && !zonedTime(flags[f])) no(`--${f} takes an ISO time with its zone, such as 2026-10-12T18:00-07:00.`);
@@ -225,8 +227,8 @@ function laterCommand(rest, run) {
   // From a terminal, as with ba send: --confirmed is the agent's word that the Owner said to send.
   if (flags.send && !run && !flags.confirmed) no('--send needs --confirmed from a terminal: run it only when the Owner\'s own words said to send then.');
   if (repeat) {
-    const payload = { chatID, every: flags.every, time: flags.time, ...flags.send ? { send: true } : {}, ...flags.until !== undefined ? { until: flags.until } : {}, note, ...flags.confirmed ? { confirmed: true } : {} };
-    return { command: 'later', capability: 'later', repeat: true, path: '/later', payload, chatID };
+    const payload = { chatID, every: flags.every, ...flags.time !== undefined ? { time: flags.time } : {}, ...flags.send ? { send: true } : {}, ...flags.until !== undefined ? { until: flags.until } : {}, note, ...flags.confirmed ? { confirmed: true } : {} };
+    return { command: 'later', capability: 'later', repeat: true, ...flags.time === undefined ? { interval: true } : {}, path: '/later', payload, chatID };
   }
   const payload = { chatID, ...flags.at !== undefined ? { at: flags.at } : {}, ...flags.in !== undefined ? { in: flags.in } : {}, ...flags['when-they-write'] ? { whenTheyWrite: true } : {},
     ...flags['unless-answered'] ? { unlessAnswered: true } : {}, ...flags.send ? { send: true } : {}, ...flags.until !== undefined ? { until: flags.until } : {}, note, ...flags.confirmed ? { confirmed: true } : {} };
@@ -241,7 +243,9 @@ export function appCommand(args, { run = process.env.COMPANION_RUN } = {}) {
   // Auto and instructions take no flags, so a stray --dry-run never becomes part of a goal. Auto's on
   // and goal take only a window's (autoWindow).
   const windowed = first === 'auto' && (rest[0] === 'on' || rest[0] === 'goal');
-  const flag = ['auto', 'instruction', 'remember', 'forget'].includes(first) && !windowed && rest.find((a) => a.startsWith('-'));
+  // An instruction by its ID is an Owner action from the table below, with its own flags.
+  const byID = first === 'instruction' && ['edit', 'undo', 'delete', 'widen'].includes(rest[0]);
+  const flag = ['auto', 'instruction', 'remember', 'forget'].includes(first) && !windowed && !byID && rest.find((a) => a.startsWith('-'));
   if (flag) throw new Error(`${flag} is not supported by ba app ${first}. These commands take no flags, and nothing was sent.`);
   if (first === 'status' && rest.length === 0) return { command: 'status', capability: 'status', path: '/status' };
   const chat = (id) => {
@@ -254,9 +258,9 @@ export function appCommand(args, { run = process.env.COMPANION_RUN } = {}) {
   // The Owner's Voice for a Chat, the same block the app's own writers get (ADR 0151).
   if (first === 'voice' && rest.length <= 1 && !rest[0]?.startsWith('-')) return { command: 'voice', capability: 'voice', path: '/voice', payload: rest.length ? { chatID: chat(rest[0]) } : {}, chatID: rest[0] };
   if (first === 'timeline' && rest.length <= 1 && !rest[0]?.startsWith('-')) return { command: 'timeline', capability: 'timeline', path: '/timeline', payload: rest.length ? { chatID: chat(rest[0]) } : {}, chatID: rest[0] };
-  if (first === 'instruction') {
+  if (first === 'instruction' && !byID) {
     const [chatID, scope] = rest;
-    if (rest.length !== 2 || !['chat', 'person'].includes(scope)) usage();
+    if (rest.length !== 2 || !['chat', 'person', 'global'].includes(scope)) usage();
     return { command: 'instruction', capability: 'instruction', path: '/instruction', payload: { chatID: chat(chatID), scope }, chatID };
   }
   // A fact the Owner told this Ask about the person in a Chat, saved as the Owner's line in their Person File.
@@ -298,10 +302,13 @@ export function appCommand(args, { run = process.env.COMPANION_RUN } = {}) {
   }
   // Intros (ADR 0096): the record, newest first, or only those where one Chat is a person's or the group.
   if (first === 'intros' && rest.length <= 1 && !rest[0]?.startsWith('-')) return { command: 'intros', capability: 'intro', path: '/intros', payload: rest.length ? { chatID: chat(rest[0]) } : {}, chatID: rest[0] };
-  if (first === 'intro') {
+  // Any other intro verb, such as pass, is an Owner action in the table below.
+  if (first === 'intro' && (rest[0] === 'make' || rest[0] === 'prepare')) {
     const [verb, ...more] = rest;
-    if (verb === 'make' && more.length === 1 && INTRO_ID.test(more[0])) return { command: 'intro make', capability: 'intro', path: '/intro/make', payload: { id: more[0] } };
-    if (verb !== 'prepare') usage();
+    if (verb === 'make') {
+      if (more.length !== 1 || !INTRO_ID.test(more[0])) usage();
+      return { command: 'intro make', capability: 'intro', path: '/intro/make', payload: { id: more[0] } };
+    }
     // A card for two people's one-to-one Chats and the exact opening message. It sends nothing.
     const chatIDs = [];
     let text;
@@ -386,6 +393,7 @@ export async function runApp(args, options = {}) {
   if (plan.stdin && !plan.payload.text) throw new Error(NO_TEXT);
   const client = await appClient(options);
   if (!client.capabilities?.includes(plan.capability)) throw new Error(plan.capability === 'later' ? LATER_UNSUPPORTED : 'APP_CLI_UNSUPPORTED');
+  if (plan.interval && !client.capabilities.includes('repeat-interval')) throw new Error('APP_CLI_UNSUPPORTED: Update Beeper Companion to use repeating intervals. Nothing was set.');
   if (plan.repeat && !client.capabilities.includes('repeat')) throw new Error(REPEAT_UNSUPPORTED);
   if (plan.action && !client.actions.includes(plan.action)) throw new Error(ACTION_UNSUPPORTED);
   const result = await client.request(plan.path, plan.payload, { change: plan.payload !== undefined && !READS.has(plan.command) && !(plan.action && plan.read), ...(plan.timeoutMs ? { timeoutMs: plan.timeoutMs } : {}) });
@@ -438,7 +446,7 @@ function timedWhen(s) {
 }
 // A repeat's days and time (slice 4), printed only when they read as --every and --time take them.
 const EVERY = /^(day|weekday|weekend|(sun|mon|tue|wed|thu|fri|sat)(,(sun|mon|tue|wed|thu|fri|sat)){0,6})$/;
-const scheduleOf = (r) => EVERY.test(r?.every ?? '') && /^([01]\d|2[0-3]):[0-5]\d$/.test(r?.time ?? '') ? `every ${r.every} at ${r.time}` : "on a schedule ba can't read";
+const scheduleOf = (r) => r?.time === null && /^[1-9]\d*[mh]$/.test(r?.every ?? '') ? `every ${r.every}` : EVERY.test(r?.every ?? '') && /^([01]\d|2[0-3]):[0-5]\d$/.test(r?.time ?? '') ? `every ${r.every} at ${r.time}` : "on a schedule ba can't read";
 function requestLines(r) {
   // A repeat's request ends with each firing, so its head leaves the end to the repeat's until.
   const repeat = r?.repeat && typeof r.repeat === 'object' ? r.repeat : null;
@@ -666,7 +674,7 @@ export function startCompanion(app, { execPath = process.execPath, env = launchE
 // started in the background when it isn't running, and refused when it still can't be reached after
 // START_WAIT_MS, or is too old to take it, never written straight to Beeper, which would skip the
 // Deliveries that may hold the Chat. With no Companion here, or one the Owner closed to the Terminal
-// (Remove in Settings → Skill), the skill writes on its own as it always has.
+// (Remove in Settings → Troubleshooting), the skill writes on its own as it always has.
 // Returns { client }, { standalone: true }, or { failure: 'not-started' | 'unavailable' }.
 export const START_WAIT_MS = 10_000;
 export async function terminalRoute(options = {}) {
