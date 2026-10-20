@@ -57,6 +57,15 @@ test('each action\'s words make exactly its request, and anything else is its us
   assert.deepEqual(plan(['reply', 'stop', SAM]), ['reply stop', '/reply/stop', { chatID: SAM }]);
   assert.deepEqual(plan(['reply', 'leave', 'out', 'first', SAM]), ['reply leave out first', '/reply/leave-out-first', { chatID: SAM }]);
   assert.deepEqual(plan(['brief', SAM]), ['brief', '/brief', { chatID: SAM }]);
+  // The wait on a later Step (ADR 0275): what the sidebar shows, then the wait to set, or the Owner's pace again.
+  assert.deepEqual(plan(['reply', 'wait', SAM, 'options', 'g1:0', '0', '2', '8s', '30s']), ['reply wait', '/reply/wait', { chatID: SAM, source: 'options', id: 'g1:0', index: 0, step: 2, before: 8_000, ms: 30_000 }]);
+  assert.deepEqual(plan(['reply', 'wait', SAM, 'draft', 'd1', '1', '1', '12', '2m']).at(-1), { chatID: SAM, source: 'draft', id: 'd1', index: 1, step: 1, before: 12_000, ms: 120_000 });
+  assert.deepEqual(plan(['reply', 'wait', SAM, 'agent', 's1', '0', '1', '1.5m', 'pace']).at(-1), { chatID: SAM, source: 'agent', id: 's1', index: 0, step: 1, before: 90_000, ms: null });
+  assert.deepEqual(plan(['reply', 'pace']), ['reply pace', '/reply/pace', {}]);
+  assert.deepEqual(plan(['reply', 'pace', 'set', '1.5']), ['reply pace set', '/reply/pace/set', { choice: '1.5' }]);
+  for (const args of [['reply', 'wait', SAM, 'options', 'g1:0', '0', '0', '8s', '30s'], ['reply', 'wait', SAM, 'box', 'g1:0', '0', '1', '8s', '30s'], ['reply', 'wait', SAM, 'options', 'g1:0', '0', '1', 'soon', '30s'],
+    ['reply', 'wait', SAM, 'options', 'g1:0', '0', '1', '8s', 'later'], ['reply', 'wait', SAM, 'options', 'g1:0', '0', '1', '8s'], ['reply', 'pace', 'set', 'fast'], ['reply', 'pace', 'set'], ['reply', 'pace', 'now']])
+    assert.throws(() => appCommand(args), /Usage:/, args.join(' '));
   assert.equal(appCommand(['brief', SAM]).timeoutMs, 10 * 60_000, 'a Brief is one agent call, which may run minutes');
   assert.deepEqual(plan(['sends']), ['sends', '/sends', {}]);
   assert.deepEqual(plan(['sends', SAM]), ['sends', '/sends', { chatID: SAM }]);

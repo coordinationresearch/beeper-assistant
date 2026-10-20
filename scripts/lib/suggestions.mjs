@@ -2,11 +2,13 @@
 // file per Chat in the state folder, named by the full SHA-256 of the Chat ID, the key Notes
 // and the companion's Store use. The newest post wins. Any process running as the Owner can
 // write here, so a file can only ever propose: the companion checks it again, shows the agent's
-// name as a claim, and sends nothing from it without the Owner's Send all in the sidebar.
+// name as a claim, and sends nothing from it without the Owner's Send all in the sidebar. A later
+// message in the Chat marks it outdated and never retires it (ADR 0071).
 import { createHash, randomUUID } from 'node:crypto';
 import { closeSync, constants, fstatSync, mkdirSync, openSync, readSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { stateDir } from './state.mjs';
+import { REPLY_LIMITS } from './reply.mjs';
 
 export const SUGGESTION_VERSION = 1;
 export const SUGGESTION_BYTES = 64 * 1024;
@@ -45,14 +47,17 @@ export function waitMs(value) {
 
 /**
  * The agent's list, [{say}, {react, key}, {wait}], as steps with the wait before each. A
- * reaction's message reference goes through resolve. Throws with what to fix.
+ * reaction's message reference goes through resolve. Throws with what to fix. A later step with no
+ * wait before it gets the shortest, 1 second, and the companion makes each wait at least as long as
+ * the Owner takes to type that step (ADR 0275), so a wait given here only ever adds a pause.
  * @param {unknown} list
  * @param {(ref: string) => Promise<string>} resolve
  */
 export async function stepsFromAgent(list, resolve) {
-  if (!Array.isArray(list) || !list.length) throw new Error('Give the steps as a JSON list, such as [{"say":"Yes!"},{"wait":"20s"},{"say":"See you at 7"}].');
+  if (!Array.isArray(list) || !list.length) throw new Error('Give the steps as a JSON list, such as [{"say":"Yes!"},{"say":"See you at 7"}].');
   const steps = [];
   let pending = 0;
+  const waited = () => { const ms = steps.length && !pending ? REPLY_LIMITS.minWaitMs : pending; pending = 0; return ms; };
   for (const item of list) {
     if (!item || typeof item !== 'object') throw new Error('Each step is {"say": "…"}, {"react": "<message>", "key": "❤️"}, or {"wait": "20s"}.');
     if ('wait' in item) {
@@ -61,9 +66,10 @@ export async function stepsFromAgent(list, resolve) {
       if (!steps.length) throw new Error('Nothing waits before the first step.');
       pending += ms;
     } else if ('say' in item) {
-      steps.push({ kind: 'message', text: String(item.say ?? '').replace(/\s+$/, ''), waitMs: pending }); pending = 0;
+      steps.push({ kind: 'message', text: String(item.say ?? '').replace(/\s+$/, ''), waitMs: waited() });
     } else if ('react' in item) {
-      steps.push({ kind: 'react', key: String(item.key ?? '').trim(), messageID: await resolve(String(item.react)), waitMs: pending }); pending = 0;
+      const messageID = await resolve(String(item.react));
+      steps.push({ kind: 'react', key: String(item.key ?? '').trim(), messageID, waitMs: waited() });
     } else throw new Error('Each step is {"say": "…"}, {"react": "<message>", "key": "❤️"}, or {"wait": "20s"}.');
   }
   if (pending) throw new Error('A wait must come before a step, not at the end.');

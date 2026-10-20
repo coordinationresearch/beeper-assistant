@@ -39,6 +39,16 @@ const choiceID = (value) => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f-]
 // its command line (model-choice.ts modelName). The app checks the value is one the row offers.
 const modelChoice = (value) => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/@[\]-]{0,127}$/.test(value);
 const EFFORT_CHOICES = ['pick', 'own', 'low', 'medium', 'high', 'xhigh', 'max'];
+// Where a Reply on show comes from, as the sidebar keys it: its own options, an Agent Draft's, a terminal agent's.
+const REPLY_SOURCES = ['options', 'draft', 'agent'];
+// Settings' Waits between messages (step-pace.ts PACE_CHOICES): learned, or a fixed factor on the Owner's pace.
+export const PACE_CHOICES = ['learned', '0.5', '1', '1.5', '2', '3'];
+// A wait as seconds, "20s", "1.5 s", or "2m", in whole milliseconds, or null.
+const waitMsOf = (value) => {
+  const m = /^(\d+(?:\.\d+)?)(s|m)?$/.exec(String(value ?? '').replace(/\s+/g, ''));
+  const ms = m ? Math.round(Number(m[1]) * (m[2] === 'm' ? 60_000 : 1000)) : NaN;
+  return Number.isSafeInteger(ms) && ms >= 0 && ms <= 3_600_000 ? ms : null;
+};
 
 const contactField = (value, max) => value === undefined || (typeof value === 'string' && value.length <= max && !/[\x00-\x1f\x7f]/.test(value));
 const namePart = value => typeof value === 'string' && value.length <= 100 && !/[\x00-\x1f\x7f]/.test(value);
@@ -50,6 +60,8 @@ const menuText = (value, multiple) => {
 // A Person's ID, as ba who and ba people print it, and the ids `person file` gives a File's lines,
 // Open loops, and an Undo. Instructions and Notes by the IDs ba app chat and ba notes print.
 const personID = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value);
+// An offer of a Reply's rest: Enter's (enter-continue.ts) or one their message left (reply-runner.ts).
+const restOfferID = value => typeof value === 'string' && /^(?:resume:)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
 const LINE_ID = /^f[1-9]\d{0,15}$/, LOOP_ID = /^l_[0-9a-f]{12}$/, UNDO_ID = /^u[0-9a-f]{16}$/;
 const PARTS = ['who', 'now', 'you', 'talk', 'history', 'others'];
 const shownText = value => typeof value === 'string' && value.length <= 4000 && !value.includes('\0');
@@ -362,7 +374,34 @@ export const ACTIONS = [
       && typeof b.text === 'string' && b.text.length <= 20_000 && typeof b.answer === 'string' && b.answer.trim().length > 0 && b.answer.length <= 80,
     chats: b => [b.chatID] },
   { name: 'reply leave out first', route: '/reply/leave-out-first', usage: 'ba app reply leave out first <chatID>', modes: both(NOT_READONLY), callers: OWNER, late: false, parse: oneChat, check: chatBody, chats: (b) => [b.chatID] },
+  // The wait before one later Step of a Reply on show (ADR 0275): <shown> is the wait the sidebar shows
+  // now, and <wait> the one to set, each as seconds, "20s", or "2m", or pace for the Owner's own pace
+  // again. It changes the Reply only, never Beeper's box, so a drafts-only run may.
+  { name: 'reply wait', route: '/reply/wait', usage: 'ba app reply wait <chatID> <source> <replyID> <index> <step> <shown> <wait|pace>', modes: both(NOT_READONLY), callers: OWNER, late: false,
+    parse: rest => {
+      if (rest.length !== 7 || !exactChatID(rest[0]) || !REPLY_SOURCES.includes(rest[1]) || !/^\d+$/.test(rest[3]) || !/^[1-9]\d*$/.test(rest[4])) throw Error('usage');
+      const before = waitMsOf(rest[5]), ms = rest[6] === 'pace' ? null : waitMsOf(rest[6]);
+      if (before === null || (rest[6] !== 'pace' && ms === null)) throw Error('usage');
+      return { chatID: rest[0], source: rest[1], id: rest[2], index: Number(rest[3]), step: Number(rest[4]), before, ms };
+    },
+    check: b => keys(b, ['chatID', 'source', 'id', 'index', 'step', 'before', 'ms']) && exactChatID(b.chatID) && REPLY_SOURCES.includes(b.source)
+      && typeof b.id === 'string' && b.id.length > 0 && b.id.length <= 2048 && Number.isSafeInteger(b.index) && b.index >= 0 && Number.isSafeInteger(b.step) && b.step >= 1
+      && Number.isSafeInteger(b.before) && b.before >= 0 && (b.ms === null || (Number.isSafeInteger(b.ms) && b.ms > 0)),
+    chats: b => [b.chatID] },
+  // Settings' Waits between messages (ADR 0275): how later Steps wait now, and the choice of learned
+  // from the Owner's changes or a fixed factor on their pace.
+  { name: 'reply pace', route: '/reply/pace', usage: 'ba app reply pace', modes: both(ALL), callers: OWNER, late: true, read: true, parse: none, check: empty, chats: () => [] },
+  { name: 'reply pace set', route: '/reply/pace/set', usage: `ba app reply pace set <${PACE_CHOICES.join('|')}>`, modes: both(FULL), callers: OWNER, late: false,
+    parse: rest => { if (rest.length !== 1 || !PACE_CHOICES.includes(rest[0])) throw Error('usage'); return { choice: rest[0] }; },
+    check: b => keys(b, ['choice']) && PACE_CHOICES.includes(b.choice), chats: () => [] },
   // Stop on a Reply that is sending (the sidebar): its waiting Steps are cancelled. Stopping only stops.
+  // The rest of a Reply offered in one press, the sidebar's Send the rest: after their message
+  // stopped it (ADR 0277), or after Enter sent only its first message (ADR 0130). `reply rest`
+  // shows the offer and its ID; `reply rest send` presses it, for exactly that offer.
+  { name: 'reply rest', route: '/reply/rest', usage: 'ba app reply rest <chatID>', modes: both(ALL), callers: OWNER, late: true, read: true, parse: oneChat, check: chatBody, chats: (b) => [b.chatID] },
+  { name: 'reply rest send', route: '/reply/rest/send', usage: 'ba app reply rest send <chatID> <offerID> --confirmed', modes: both(FULL), callers: OWNER, late: false,
+    parse: (rest) => { if (rest.length !== 3 || !exactChatID(rest[0]) || !restOfferID(rest[1]) || rest[2] !== '--confirmed') throw new Error('usage'); return { chatID: rest[0], id: rest[1], confirmed: true }; },
+    check: (b) => keys(b, ['chatID', 'id', 'confirmed']) && exactChatID(b.chatID) && restOfferID(b.id) && b.confirmed === true, chats: (b) => [b.chatID] },
   { name: 'reply stop', route: '/reply/stop', usage: 'ba app reply stop <chatID>', modes: both(NOT_READONLY), callers: OWNER, late: true, parse: oneChat, check: chatBody, chats: (b) => [b.chatID] },
   // Brief now (the sidebar): a Chat's Brief written now, or the saved one when it already read the
   // newest message. It writes nothing to Beeper, so a late run may; a read-only run spends nothing.

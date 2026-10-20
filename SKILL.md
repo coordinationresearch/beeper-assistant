@@ -126,15 +126,15 @@ A chat holds one draft. `ba draft` refuses to replace a draft it did not write u
 
 ### Post the reply to the sidebar
 
-When the Owner runs Beeper Companion, post the reply to its sidebar instead of saving a draft: `ba suggest <chat> --text "…" --after <newest message>`. The sidebar labels it with your name and can place its first text message in Beeper's compose box when the Owner opens that chat. A reaction-only reply has no Draft and leaves the compose box unchanged. Nothing sends until the Owner presses Send there. `ba` refuses when a message came in after the one you read, and a newer message later retires the reply, so read the chat again and write for its newest message.
+When the Owner runs Beeper Companion, post the reply to its sidebar instead of saving a draft: `ba suggest <chat> --text "…" --after <newest message>`. The sidebar labels it with your name and can place its first text message in Beeper's compose box when the Owner opens that chat. A reaction-only reply has no Draft and leaves the compose box unchanged. Nothing sends until the Owner presses Send there. `ba` refuses when a message came in after the one you read, so read the chat again and write for its newest message. A message after you post never removes the reply: after the Owner's own it stays on show, marked as written before it, and after the other person's it waits behind a click, so answering their newer message takes a new post.
 
-A reply can come in steps, the way people text: a tapback, a quick answer, then the longer thought a few seconds later. Write one only when that is how the Owner answers this person:
+A reply can come in steps, the way people text: a tapback, a quick answer, then the longer thought. Write one only when that is how the Owner answers this person:
 
 ```
-ba suggest <chat> --after <newest message> --steps '[{"react":"<message>","key":"❤️"},{"say":"yes!!"},{"wait":"20s"},{"say":"want me to book a table at 7?"}]'
+ba suggest <chat> --after <newest message> --steps '[{"react":"<message>","key":"❤️"},{"say":"yes!!"},{"say":"want me to book a table at 7?"}]'
 ```
 
-At most 6 steps and 2 reactions. Each wait is between 1 second and 5 minutes, and all of them together come to at most 10 minutes. A reaction names one of the chat's 30 newest messages. The Owner confirms the whole reply once, and anything still waiting is cancelled if the other person writes, the Owner types there, or the Mac sleeps. `ba suggest` changes nothing in Beeper, so it needs no Confirmation and works in drafts-only mode. Add `--agent "<your name>"` when `ba` names you wrong.
+Leave the waits out. The companion waits before each step about as long as the Owner takes to type a text that long, from their own messages, and the Owner can change any wait before sending. Add a wait, such as `{"wait":"2m"}` before a step, only when the moment needs a longer pause than that, such as a check before the answer; a wait never makes a step go sooner. At most 6 steps and 2 reactions. Each wait is between 1 second and 5 minutes, and all of them together come to at most 10 minutes. A reaction names one of the chat's 30 newest messages. The Owner confirms the whole reply once, and anything still waiting is cancelled if the other person writes, the Owner types there, or the Mac sleeps. `ba suggest` changes nothing in Beeper, so it needs no Confirmation and works in drafts-only mode. Add `--agent "<your name>"` when `ba` names you wrong.
 
 ### Notes
 

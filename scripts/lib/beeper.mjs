@@ -3,6 +3,8 @@
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+// ba's own sends and Drafts escape their text for Beeper's Markdown reading (ADR 0276).
+export { escapeMarkdown } from './markdown-escape.mjs';
 
 export class BeeperError extends Error {
   constructor(message, detail = {}) {

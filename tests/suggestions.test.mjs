@@ -21,11 +21,15 @@ test('the agent is named from its environment, or by what it says it is', () => 
 });
 
 test('an agent\'s steps become messages and reactions with the wait before each', async () => {
+  // A later step with no wait gets the shortest, which the companion lengthens to the Owner's pace (ADR 0275).
   assert.deepEqual(await stepsFromAgent([{ react: 'm1a2b3c4', key: '❤️' }, { say: 'Yes!' }, { wait: '20s' }, { wait: 5 }, { say: 'See you at 7  ' }], resolve), [
     { kind: 'react', key: '❤️', messageID: 'msg-1', waitMs: 0 },
-    { kind: 'message', text: 'Yes!', waitMs: 0 },
+    { kind: 'message', text: 'Yes!', waitMs: REPLY_LIMITS.minWaitMs },
     { kind: 'message', text: 'See you at 7', waitMs: 25_000 },
   ]);
+  const unwaited = await stepsFromAgent([{ say: 'Yes!' }, { say: 'See you at 7' }, { wait: '0s' }, { react: 'm1a2b3c4', key: '❤️' }], resolve);
+  assert.deepEqual(unwaited.map(step => step.waitMs), [0, 1_000, 1_000], 'no wait, or a wait of nothing, is the 1-second floor');
+  assert.equal(replyProblem({ steps: unwaited }, new Set(['msg-1'])), null, 'and passes the reply rules as written');
   assert.equal(waitMs('2m'), 120_000); assert.equal(waitMs('1.5 s'), 1500); assert.equal(waitMs('500ms'), 500); assert.ok(Number.isNaN(waitMs('soon')));
   await assert.rejects(stepsFromAgent([{ wait: '5s' }, { say: 'x' }], resolve), /Nothing waits before the first step/);
   await assert.rejects(stepsFromAgent([{ say: 'x' }, { wait: '5s' }], resolve), /not at the end/);

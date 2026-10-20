@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import * as vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import { gapsIn } from '../scripts/lib/gaps.mjs';
+import { escapeMarkdown } from '../scripts/lib/markdown-escape.mjs';
 import { FIRST_MESSAGE_IN_CREATE, memberKey } from '../scripts/lib/groups.mjs';
 
 process.env.TZ = 'UTC'; // The VM-enabled direct test invocation uses the same captured timezone.
@@ -23,6 +24,9 @@ const cases = {
 const confirmed = new Set(['same', 'different', 'send', 'react', 'edit', 'delete', 'contact', 'group', 'start']);
 const previews = new Set(['draft', 'suggest']);
 const booleans = ['json', 'confirmed', 'replace', 'for-everyone', 'dismiss-on-message', 'help', 'all', 'dry-run'];
+
+// What Beeper keeps of an escaped text: its backslash escapes and the references for spaces consumed.
+const beeperReads = (text) => String(text).replace(/\\([!-/:-@[-`{-~])/g, '$1').replaceAll('&#32;', ' ').replaceAll('&#9;', '\t');
 
 async function replay(argv, { alias = false, text = source, existing = '', line = [], env = {}, app = null, network = 'WhatsApp', failCreate = false, older = [], more = [] } = {}) {
   const mutations = [], stdout = [], stderr = [];
@@ -51,7 +55,7 @@ async function replay(argv, { alias = false, text = source, existing = '', line 
     FIRST_MESSAGE_IN_CREATE, memberKey,
     olderIMessageGroup: async (handles, read) => (await read()).some((g) => g.length === handles.length && handles.every((h) => g.includes(h))),
     holdsExactly: (c, members) => mocks.isGroup(c) && mocks.counterparties(c).length === members.length && members.every((m) => mocks.counterparties(c).some((p) => p.id === m.id)),
-    gapsIn, clip: (s) => s, plural: (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`, quote: (s) => `«${s}»`, htmlToText: (s) => s,
+    gapsIn, escapeMarkdown, clip: (s) => s, plural: (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`, quote: (s) => `«${s}»`, htmlToText: (s) => s,
     openCorpus: () => ({ ok: true, file: '/synthetic' }), decideSame: mutate('identity', { ok: true }),
     addNote: mutate('note', { status: 'saved', note: { id: 'n00000000', author: 'agent', source: { messages: [] } } }),
     deleteNote: mutate('deleteNote', { status: 'deleted', note: { id: 'n00000000' } }),
@@ -59,7 +63,7 @@ async function replay(argv, { alias = false, text = source, existing = '', line 
     dismiss: mutate('dismiss'), undismiss: mutate('undismiss'), recordDraft: mutate('recordDraft'),
     runBeeper: (args, opts) => {
       if (opts?.write) mutations.push(['cli', args]);
-      if (args[1] === 'draft') draft = args.includes('--clear') ? '' : args[args.indexOf('--text') + 1];
+      if (args[1] === 'draft') draft = args.includes('--clear') ? '' : beeperReads(args[args.indexOf('--text') + 1]);
       if (args[1] === 'delete') messages = [];
       return { id: '!new' };
     },
@@ -68,7 +72,7 @@ async function replay(argv, { alias = false, text = source, existing = '', line 
       // failCreate: Beeper errors at once and makes nothing, as iMessage did on 2026-10-11 without a first message.
       if (path === '/v1/chats' && failCreate) return { ok: false, error: 'Failed to execute tool: createChat' };
       if (path === '/v1/chats') { created = true; if (body.messageText) messages.push({ id: 'sent-1', text: body.messageText, isSender: true }); }
-      else messages.push({ id: 'sent-1', text: body.text, isSender: true });
+      else messages.push({ id: 'sent-1', text: beeperReads(body.text), isSender: true });
       return { ok: true };
     },
   };
@@ -117,6 +121,17 @@ if (!vm.SourceTextModule) {
       const r = await replay(args); assert.equal(r.status, 2, r.stderr); assert.deepEqual(r.mutations, []);
     }
     const r = await replay(['draft', '!one', '--text=--dry-run']); assert.equal(r.status, 0, r.stderr); assert.ok(r.mutations.length);
+  });
+  // Beeper reads message and draft text as Markdown, so ba's own writes go escaped and arrive as typed
+  // (lib/markdown-escape.mjs, ADR 0276), and their checks find the text as written.
+  test('ba send and ba draft without the Companion give Beeper the text escaped', async () => {
+    const list = 'Bring:\n- snacks\n- *cups*', escaped = 'Bring:\n\\- snacks\n\\- \\*cups\\*';
+    const sent = await replay(['send', '!one', '--text', list, '--after', 'msg-1', '--confirmed']);
+    assert.equal(sent.status, 0, sent.stdout + sent.stderr);
+    assert.deepEqual(sent.mutations.filter(([kind]) => kind === 'api').map(([, r]) => r.body.text), [escaped]);
+    const drafted = await replay(['draft', '!one', '--text', list]);
+    assert.equal(drafted.status, 0, drafted.stdout + drafted.stderr);
+    assert.deepEqual(drafted.mutations.filter(([kind]) => kind === 'cli').map(([, args]) => args.at(-1)), [escaped]);
   });
   // iMessage makes a group only by sending into it, so the first message goes in the one create
   // request (ADR 0001). Elsewhere the group is created empty, as the golden output above pins.
@@ -303,7 +318,7 @@ const OUTPUT = {
 "different": {"status":0,"stdout":"Recorded: different people. It takes effect when the corpus next rebuilds, within about 15 minutes.\n","stderr":"","mutations":[["identity",["/synthetic","p_a","p_b","different"]]]},
 "note": {"status":0,"stdout":"Note n00000000 saved in Test Chat · WhatsApp, as a claim by agent, citing 0 messages. Nothing was sent.\n","stderr":"","mutations":[["note",["!one",{"text":"Synthetic reply","kind":"agent","author":"agent","source":{"messages":[]}}]]]},
 "draft": {"status":0,"stdout":"Draft saved in Test Chat · WhatsApp. Nothing was sent. The Owner can review and send it in Beeper.\n","stderr":"","mutations":[["cli",["chats","draft","--chat","!one","--text","Synthetic reply"]],["recordDraft",[{"aliases":{},"drafted":{},"dismissed":{}},"!one",{"text":"Synthetic reply"}]],["state",[{"aliases":{},"drafted":{},"dismissed":{}}]]]},
-"suggest": {"status":0,"stdout":"Posted to Beeper Companion's sidebar for Test Chat · WhatsApp: 1 message, as Test. Nothing was sent. When the Owner opens this Chat, the sidebar puts the first message in Beeper's compose box, and the reply sends only if they press Send there. A newer message in the Chat retires it.\n","stderr":"","mutations":[["suggestion",["!one",{"steps":[{"kind":"message","text":"Synthetic reply","waitMs":0}],"forMessageID":"msg-1","author":"Test"}]]]},
+"suggest": {"status":0,"stdout":"Posted to Beeper Companion's sidebar for Test Chat · WhatsApp: 1 message, as Test. Nothing was sent. When the Owner opens this Chat, the sidebar puts the first message in Beeper's compose box, and the reply sends only if they press Send there. A newer message marks it outdated without removing it; when they write again, read the chat and post again for their newest message.\n","stderr":"","mutations":[["suggestion",["!one",{"steps":[{"kind":"message","text":"Synthetic reply","waitMs":0}],"forMessageID":"msg-1","author":"Test"}]]]},
 "send": {"status":0,"stdout":"Sent to Test Chat · WhatsApp. The message is in the chat as ref-sent-1. Delivery is not confirmed.\n","stderr":"","mutations":[["api",{"method":"POST","path":"/v1/chats/!one/messages","body":{"text":"Synthetic reply"}}]]},
 "read": {"status":0,"stdout":"Marked read: Test Chat · WhatsApp.\n","stderr":"","mutations":[["cli",["chats","mark-read","--chat","!one"]]]},
 "react": {"status":0,"stdout":"Reacted 👍 to ref-msg-1 in Test Chat · WhatsApp.\n","stderr":"","mutations":[["cli",["send","react","--to","!one","--id","msg-1","--reaction","👍"]]]},

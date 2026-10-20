@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 // Reads are compact. Writes take exact chat references only and verify by reading back.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { BeeperError, SEARCH_MEDIA, apiOnce, asList, attachmentFile, listChats, listChatsSince, listMessages, listMessagesFast, participantsOf, runBeeper, searchChats, searchMessages, showChat } from './lib/beeper.mjs';
+import { BeeperError, SEARCH_MEDIA, apiOnce, escapeMarkdown, asList, attachmentFile, listChats, listChatsSince, listMessages, listMessagesFast, participantsOf, runBeeper, searchChats, searchMessages, showChat } from './lib/beeper.mjs';
 import { loadContacts, looksLikeEmail, looksLikePhone, normalizeEmail, normalizePhone, ownersOf, resetContacts, searchPeople } from './lib/contacts.mjs';
 import { addContact } from './lib/contacts-write.mjs';
 import { meCardNames } from './lib/addressed.mjs';
@@ -794,7 +794,7 @@ async function cmdDraft({ pos, flags }) {
     if (!ok) { process.exitCode = exitCode; return; }
   } else {
     if (existing) await runBeeper(['chats', 'draft', '--chat', chat.id, '--clear'], { write: true });
-    await runBeeper(['chats', 'draft', '--chat', chat.id, '--text', text], { write: true });
+    await runBeeper(['chats', 'draft', '--chat', chat.id, '--text', escapeMarkdown(text)], { write: true }); // Beeper reads it as Markdown (ADR 0276)
     const after = await showChat(chat.id);
     const saved = draftText(after);
     if (!sameText(saved, text)) throw new BeeperError(`Draft did not save as written. Beeper now holds: ${saved ? quote(clip(saved, 200)) : 'no draft'}. Give the Owner the text to paste.`);
@@ -842,7 +842,7 @@ async function cmdSuggest({ pos, flags }) {
   const counts = `${plural(steps.filter((s) => s.kind === 'message').length, 'message')}${steps.some((s) => s.kind === 'react') ? ` and ${plural(steps.filter((s) => s.kind === 'react').length, 'reaction')}` : ''}`;
   if (flags['dry-run']) { console.log(`Dry run. Would post ${counts} to the sidebar for ${label(chat, contacts)}, as ${author}.`); return; }
   writeSuggestion(chat.id, { steps, forMessageID: String(newest.id), author });
-  console.log(`Posted to Beeper Companion's sidebar for ${label(chat, contacts)}: ${counts}, as ${author}. Nothing was sent. When the Owner opens this Chat, the sidebar puts the first message in Beeper's compose box, and the reply sends only if they press Send there. A newer message in the Chat retires it.`);
+  console.log(`Posted to Beeper Companion's sidebar for ${label(chat, contacts)}: ${counts}, as ${author}. Nothing was sent. When the Owner opens this Chat, the sidebar puts the first message in Beeper's compose box, and the reply sends only if they press Send there. A newer message marks it outdated without removing it; when they write again, read the chat and post again for their newest message.`);
 }
 
 async function verifyOutgoing(chat, text, beforeIDs) {
@@ -925,7 +925,7 @@ async function cmdSend({ pos, flags }) {
     return;
   }
   if (flags.file !== undefined) throw new UsageError('Open Beeper Companion to send files through its guarded send path. Nothing was sent.');
-  const res = await apiOnce('POST', `/v1/chats/${encodeURIComponent(chat.id)}/messages`, body);
+  const res = await apiOnce('POST', `/v1/chats/${encodeURIComponent(chat.id)}/messages`, { ...body, text: escapeMarkdown(text) }); // read as Markdown (ADR 0276)
   const failure = res.ok ? null : new BeeperError(res.error);
   const found = await verifyOutgoing(chat, text, before);
   if (found.length === 1) {
