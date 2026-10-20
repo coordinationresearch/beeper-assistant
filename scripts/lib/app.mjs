@@ -74,7 +74,10 @@ export async function appClient({ directory = stateDir(), dataHome = defaultData
   }
   const meta = await request('/metadata');
   if (meta.protocol !== 1 || meta.launch !== d.launch || meta.dataHome !== dataHome) throw new Error('APP_CLI_HANDSHAKE');
-  return { request, capabilities: meta.capabilities, actions: Array.isArray(meta.actions) ? meta.actions : [] };
+  // run: the kind of the Companion run that asks, as the app names it, or null from a terminal or an
+  // app older than the field.
+  const asking = run && typeof meta.run?.kind === 'string' ? { kind: meta.run.kind } : null;
+  return { request, capabilities: meta.capabilities, actions: Array.isArray(meta.actions) ? meta.actions : [], run: asking };
 }
 
 export const APP_USAGE = `Usage:
@@ -382,6 +385,7 @@ export function appCommand(args, { run = process.env.COMPANION_RUN } = {}) {
 
 // Commands that post a body and change nothing a lost answer could leave unknown. Preparing an
 // Intro only saves its card, so it is one of them.
+const RUN_KIND_UNSUPPORTED = 'APP_CLI_UNSUPPORTED: This Beeper Companion is too old to say which run this is, so read-only mode refused the command. Ask the Owner to update Beeper Companion. Nothing changed.';
 const READS = new Set(['replies', 'chat', 'voice', 'timeline', 'intros', 'intro prepare', 'coordinations', 'round prepare']);
 
 export async function runApp(args, options = {}) {
@@ -392,6 +396,11 @@ export async function runApp(args, options = {}) {
   if (plan.stdin) plan.payload.text = readFileSync(0, 'utf8').replace(/\s+$/, '');
   if (plan.stdin && !plan.payload.text) throw new Error(NO_TEXT);
   const client = await appClient(options);
+  // runKind: the only run kind this command may run in (ba.mjs refuseByMode), checked once the app
+  // has named the run's kind and before anything is asked of it. An app too old to name it is refused
+  // too, with an update to ask for rather than a mode to loosen.
+  if (options.runKind && !client.run) throw new Error(RUN_KIND_UNSUPPORTED);
+  if (options.runKind && client.run.kind !== options.runKind) throw options.refused ?? new Error('APP_CLI_REFUSED');
   if (!client.capabilities?.includes(plan.capability)) throw new Error(plan.capability === 'later' ? LATER_UNSUPPORTED : 'APP_CLI_UNSUPPORTED');
   if (plan.interval && !client.capabilities.includes('repeat-interval')) throw new Error('APP_CLI_UNSUPPORTED: Update Beeper Companion to use repeating intervals. Nothing was set.');
   if (plan.repeat && !client.capabilities.includes('repeat')) throw new Error(REPEAT_UNSUPPORTED);
@@ -615,6 +624,25 @@ export function timedLines(outcome, { label }) {
     'Beeper Companion texts the Owner the whole list as it starts. Each text goes at its time whatever people reply, and the list ends if the Owner types or sends in that Chat.',
     `Tell the Owner it's set and how many texts, without repeating them. ba app later stop ${id} stops the rest.`,
   ], exitCode: 0 };
+}
+
+// ---- The Owner's changes to the Playbook (ADR 0109) ----
+// Standing instructions for one situation, which only the Companion can vouch for, so ba playbook
+// reads them from it. situation: a title, or none for every situation. Returns { changes }, each
+// { id, situation, move, n, cut, text, at }, or { failure: 'unavailable' | 'old' | 'unreadable' | 'refused', message }.
+const CHANGE_KEYS = ['id', 'situation', 'move', 'n', 'cut', 'text', 'at'];
+const changeShape = (c) => Boolean(c) && typeof c === 'object' && CHANGE_KEYS.every((k) => k in c) && /^[A-Za-z0-9_-]{1,128}$/.test(c.id)
+  && typeof c.situation === 'string' && (c.move === null || typeof c.move === 'string') && (c.n === null || Number.isSafeInteger(c.n))
+  && typeof c.cut === 'boolean' && typeof c.text === 'string' && typeof c.at === 'string';
+export async function playbookChanges(situation, options = {}) {
+  let client;
+  try { client = await appClient(options); } catch (error) { const message = String(error?.message ?? ''); return Object.values(MESSAGES).includes(message) ? { failure: 'refused', message } : { failure: 'unavailable' }; }
+  if (!client.actions.includes('playbook')) return { failure: 'old' };
+  let answer;
+  try { answer = await client.request('/playbook', situation ? { situation } : {}); }
+  catch (error) { const message = String(error?.message ?? ''); return message === 'APP_CLI_UNAVAILABLE' ? { failure: 'unavailable' } : { failure: 'refused', message }; }
+  if (answer?.ok !== true || !Array.isArray(answer.changes) || !answer.changes.every(changeShape)) return { failure: 'unreadable' };
+  return { changes: answer.changes };
 }
 
 // ---- Sends through the Companion (docs/plans/one-agent.md, part 6 and slice 5; ADR 0110) ----

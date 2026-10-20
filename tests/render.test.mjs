@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { buildIndex } from '../scripts/lib/contacts.mjs';
-import { UNTRUSTED_NOTE, age, ago, plural, quote, renderChat, renderTriage } from '../scripts/lib/render.mjs';
+import { UNTRUSTED_NOTE, age, ago, plural, quote, renderChat, renderTriage, renderWho } from '../scripts/lib/render.mjs';
+import { beeperChatOf } from '../scripts/lib/corpus.mjs';
 import { chatAlias, isChatAlias, isMessageAlias, messageAlias, rememberChats } from '../scripts/lib/state.mjs';
 import { buildTriage } from '../scripts/lib/triage.mjs';
 import { CONTACT_ROWS, NOW, chat, person } from './fixtures.mjs';
@@ -126,4 +127,16 @@ test('reaction lists retain native and custom keys even without separate events'
   assert.ok(out.includes('laugh'));
   assert.ok(out.includes('😂'));
   assert.ok(!out.includes('😂x2'));
+});
+
+test("who names no Beeper Chat for one made from a network's download, and still lists it", () => {
+  assert.equal(beeperChatOf({ chat_key: 'export:linkedin:2-AAA', beeper_chat_id: null }), null);
+  assert.equal(beeperChatOf({ chat_key: 'imessage:any;-;+15550100', beeper_chat_id: 'imsg##thread:ab' }), 'imsg##thread:ab');
+  assert.equal(beeperChatOf({ chat_key: '!li1:beeper.local', beeper_chat_id: null }), '!li1:beeper.local');
+  const out = renderWho({ display_name: 'Priya Natarajan', state: 'ok', chats: [
+    { chat_key: '!li1:beeper.local', beeper_chat_id: null, network: 'linkedin', messages: 3, last_at: NOW - 86_400_000 },
+    { chat_key: 'export:linkedin:2-BBB', beeper_chat_id: null, network: 'linkedin', messages: 2, last_at: NOW - 90 * 86_400_000 }], stats: null, conflicts: [], suggestions: [] }, { now: NOW, chatRef: (id) => `ref:${id}` });
+  assert.match(out, /ref:!li1:beeper\.local/);
+  assert.match(out, /\(from a download, not in Beeper\)/);
+  assert.doesNotMatch(out, /ref:export:/);
 });

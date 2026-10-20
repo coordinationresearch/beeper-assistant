@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { addNote, readNotes, notesFile, withLock } from '../scripts/lib/notes.mjs';
-import { OWNER_INSTRUCTIONS_KEY, addInstruction, deleteInstruction, listInstructions, undoInstruction } from '../scripts/lib/instructions.mjs';
+import { OWNER_INSTRUCTIONS_KEY, OWNER_PLAYBOOK_KEY, addInstruction, deleteInstruction, listInstructions, undoInstruction } from '../scripts/lib/instructions.mjs';
 import * as older from './old-instructions.mjs';
 
 const sign = fields => createHmac('sha256', 'synthetic-test-key').update(JSON.stringify(fields)).digest('hex');
@@ -221,4 +221,51 @@ test('a wider copy saved with requires commits only while its source is active, 
   await undoInstruction(chat.id, opts);
   assert.equal((await addInstruction(input('Short replies', 'person', 'p1'), { ...opts, requires: chat.id })).status, 'stale');
   assert.equal((await older.listInstructions({ dir: opts.dir })).length, 2, 'an older skill copy reads both records');
+});
+
+// The Owner's changes to the Playbook (ADR 0109), in their own document.
+const situation = (text, more = {}) => ({ text, scope: { kind: 'situation', key: 'Hard news' }, source: { chatID: 'home' }, ...more });
+const MOVE = 'Check in later without being asked.';
+
+test('a situation scope lives only in the Playbook document, which takes a move and a cut', async t => {
+  const opts = fixture(t), playbook = { ...opts, doc: OWNER_PLAYBOOK_KEY };
+  await assert.rejects(addInstruction(situation('Two lines at most'), opts), /valid scope/, 'the Chat document refuses a fifth kind');
+  await assert.rejects(addInstruction(input('Short'), playbook), /valid scope/, 'the Playbook document holds only situations');
+  await assert.rejects(addInstruction(situation('Words', { move: MOVE }), opts), /valid scope/);
+  const reworded = (await addInstruction(situation('Check in on the hard date only.', { move: MOVE }), playbook)).instruction;
+  assert.equal(reworded.move, MOVE);
+  await assert.rejects(addInstruction(situation('', { move: MOVE }), playbook), /original text/, 'only a cut has no words');
+  await assert.rejects(addInstruction(situation('Words', { cut: true }), playbook), /original text/, 'a cut names its move and has no words');
+  const cut = (await addInstruction(situation('', { move: MOVE, cut: true, supersedes: reworded.id }), playbook)).instruction;
+  assert.equal(cut.cut, true);
+  assert.equal((await addInstruction(situation('', { move: MOVE, cut: true }), playbook)).status, 'duplicate');
+  assert.equal((await addInstruction(situation('Other words', { move: 'Another move.', supersedes: cut.id }), playbook)).status, 'stale', 'a replacement keeps its move');
+  const whole = (await addInstruction(situation('Never send a link.'), playbook)).instruction;
+  assert.equal(whole.move, undefined);
+  assert.deepEqual((await listInstructions(playbook)).map(i => [i.status, i.cut ?? false]), [['superseded', false], ['active', true], ['active', false]]);
+  assert.equal((await undoInstruction(cut.id, playbook)).restored.id, reworded.id, 'Undo of a cut gives the words back');
+  assert.deepEqual((await deleteInstruction(reworded.id, playbook)).removed.map(i => i.id), [reworded.id, cut.id]);
+  assert.deepEqual(await listInstructions(opts), [], 'the Chat document never saw any of it');
+});
+
+test('older skill copies never read the Playbook document, and a damaged one hides no Chat instruction', async t => {
+  const opts = fixture(t), playbook = { ...opts, doc: OWNER_PLAYBOOK_KEY };
+  const chat = (await addInstruction(input('Short replies'), opts)).instruction;
+  await addInstruction(situation('Two lines at most.'), playbook);
+  assert.deepEqual(await older.listInstructions(opts), [chat], 'an older copy reads the Chat document as before');
+  assert.equal((await older.addInstruction(input('From an older copy'), opts)).status, 'added');
+  writeFileSync(notesFile(OWNER_PLAYBOOK_KEY, opts), '{"instructions": "damaged"}');
+  await assert.rejects(listInstructions(playbook), /damaged/);
+  assert.equal((await listInstructions(opts)).length, 2);
+  await assert.rejects(listInstructions({ ...opts, doc: 'somewhere else' }), /known instructions document/);
+});
+
+test('a Playbook record whose move or cut was changed by hand fails its signature', async t => {
+  const opts = fixture(t), playbook = { ...opts, doc: OWNER_PLAYBOOK_KEY };
+  await addInstruction(situation('Check in on the hard date only.', { move: MOVE }), playbook);
+  const file = notesFile(OWNER_PLAYBOOK_KEY, opts);
+  const doc = JSON.parse(readFileSync(file, 'utf8'));
+  doc.instructions[0].move = 'Another move.';
+  writeFileSync(file, JSON.stringify(doc));
+  await assert.rejects(addInstruction(situation('More words'), playbook), /damaged or unverified/, 'every write verifies every record, move included');
 });

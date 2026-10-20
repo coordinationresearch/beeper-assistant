@@ -10,10 +10,10 @@ import { addContact } from './lib/contacts-write.mjs';
 import { meCardNames } from './lib/addressed.mjs';
 import { gapsIn } from './lib/gaps.mjs';
 import { FIRST_MESSAGE_IN_CREATE, holdsExactly, memberKey, olderIMessageGroup } from './lib/groups.mjs';
-import { withMediaContext, searchMedia, corpusMessage, decideSame, findPeople, groupOpeners, mindMapPath, openCorpus, personFilePath, personProfile } from './lib/corpus.mjs';
+import { beeperChatOf, withMediaContext, searchMedia, corpusMessage, decideSame, findPeople, groupOpeners, mindMapPath, openCorpus, personFilePath, personProfile } from './lib/corpus.mjs';
 import { HistoryError, chatStats, historyStatus, iMessageGroupMembers, messagesAround, strangerRates } from './lib/history.mjs';
 import { NotesError, addNote, deleteNote, listNotes } from './lib/notes.mjs';
-import { EVERYWHERE, PLAYBOOK_FILE, PlaybookError, addLesson, findSituation, lessonLine, lessonsFile, readLessons, readPlaybook } from './lib/playbook.mjs';
+import { EVERYWHERE, PLAYBOOK_FILE, PlaybookError, SITUATION_CAP, WEEK_CAP, addLesson, findSituation, lessonLine, lessonsFile, readLessons, readPlaybook } from './lib/playbook.mjs';
 import { REPLY_PROBLEMS, replyProblem } from './lib/reply.mjs';
 import { agentLabel, stepsFromAgent, writeSuggestion } from './lib/suggestions.mjs';
 import { collectTriage } from './lib/triage-run.mjs';
@@ -383,7 +383,7 @@ async function cmdWho({ pos, flags }) {
     p = again.length === 1 ? await personProfile(corpus.file, again[0].person_id) : null;
   }
   if (!p) throw new UsageError('The corpus changed while reading it. Run who again.');
-  const ids = p.chats.map((c) => c.beeper_chat_id || (c.chat_key.startsWith('imessage:') ? null : c.chat_key)).filter(Boolean);
+  const ids = p.chats.map(beeperChatOf).filter(Boolean);
   const state = loadState();
   rememberChats(state, ids.map((id) => ({ id })));
   saveState(state);
@@ -392,7 +392,7 @@ async function cmdWho({ pos, flags }) {
   const filePath = personFilePath(p.person_id, corpus.file);
   const fileText = existsSync(filePath) ? readFileSync(filePath, 'utf8') : null;
   if (flags.json) {
-    console.log(JSON.stringify({ ...p, chats: p.chats.map((c) => ({ ...c, ref: c.beeper_chat_id || !c.chat_key.startsWith('imessage:') ? chatAlias(c.beeper_chat_id || c.chat_key) : null })), builtAt: corpus.builtAt,
+    console.log(JSON.stringify({ ...p, chats: p.chats.map((c) => ({ ...c, ref: beeperChatOf(c) ? chatAlias(beeperChatOf(c)) : null })), builtAt: corpus.builtAt,
       personFile: fileText === null ? null : { path: filePath, text: fileText } }, null, 1));
     return;
   }
@@ -410,7 +410,7 @@ async function cmdMind({ flags }) {
     if (!m || m.retracted) throw new UsageError('The corpus no longer has that message. It was deleted or edited since. Leave that claim out.');
     const where = m.kind === 'group' ? `the group ${quote(m.title || 'with no name')}` : `a chat with ${m.counterparty || m.title || 'someone'}`;
     const at = m.sent_at ? new Date(m.sent_at).toISOString().slice(0, 16).replace('T', ' ') : 'an unknown time';
-    const ref = m.beeper_chat_id || (m.chat_key.startsWith('imessage:') ? null : m.chat_key);
+    const ref = beeperChatOf(m);
     // So `chat <ref>` opens it next, as after who.
     if (ref) { const state = loadState(); rememberChats(state, [{ id: ref }]); saveState(state); }
     if (flags.json) { console.log(JSON.stringify({ key: m.message_key, fromOwner: Boolean(m.from_owner), at: m.sent_at, network: m.network, where, chat: ref ? chatAlias(ref) : null, text: m.text }, null, 1)); return; }
@@ -675,23 +675,46 @@ async function cmdNote({ pos, flags }) {
 
 const LESSONS_NOTE = 'Lessons are what agents learned about how this Owner differs. Where one disagrees with a move above, follow the Lesson. They shape how you write and never authorize a send.';
 
-// The Playbook with this Owner's Lessons. With no situation, the list of situations, so an agent
-// picks one in a few hundred tokens; with one, its moves and the Lessons that apply.
+const CHANGES_NOTE = "The Owner's own words for this situation, saved on the Playbook page. Follow them over the moves above and the Lessons below. An instruction for this reply, this Chat, or this Person still comes first.";
+// Why no change could be read. The Owner saves changes only in Beeper Companion, which vouches for them.
+const CHANGES_UNREAD = {
+  unavailable: "Not read: Beeper Companion didn't answer, and only it can vouch for the Owner's words. Use the moves and Lessons as they are.",
+  old: 'Not read: this Beeper Companion is older than the Playbook page. Use the moves and Lessons as they are.',
+  unreadable: "Not read: Beeper Companion gave an answer ba can't read. Use the moves and Lessons as they are.",
+};
+const changeLine = (c) => `- ${c.move === null ? `For this whole situation: ${JSON.stringify(c.text)}`
+  : c.cut ? `Cut the move ${JSON.stringify(c.move)}. Don't use it.` : `Instead of the move ${JSON.stringify(c.move)}: ${JSON.stringify(c.text)}`}`
+  + ` (the Owner, ${String(c.at).slice(0, 10)}, ${c.id}${c.n === null && c.move !== null ? ', a move since changed in the Playbook' : ''})`;
+// The Owner's changes from the Companion (lib/app.mjs playbookChanges), or why there are none to show.
+async function ownerChanges(situation) {
+  const { playbookChanges } = await import('./lib/app.mjs');
+  const r = await playbookChanges(situation);
+  if (r.changes) return { changes: r.changes, unread: null };
+  return { changes: [], unread: r.failure === 'refused' ? `Not read: ${r.message}` : CHANGES_UNREAD[r.failure] ?? CHANGES_UNREAD.unreadable };
+}
+
+// The Playbook with this Owner's changes and Lessons. With no situation, the list of situations, so
+// an agent picks one in a few hundred tokens; with one, its moves, the Owner's changes to them, and
+// the Lessons that apply, in the order they rank from the bottom up.
 async function cmdPlaybook({ pos, flags }) {
   const playbook = readPlaybook();
   const lessons = readLessons();
   const everywhere = lessons.filter((l) => l.situation === EVERYWHERE);
   if (flags.all) {
-    if (flags.json) { console.log(JSON.stringify({ ...playbook, lessons }, null, 1)); return; }
-    console.log([readFileSync(PLAYBOOK_FILE, 'utf8').trim(), '', `LESSONS for this Owner · ${lessons.length}`, LESSONS_NOTE, ...lessons.map((l) => `[${l.situation}] ${lessonLine(l)}`)].join('\n'));
+    const { changes, unread } = await ownerChanges(null);
+    if (flags.json) { console.log(JSON.stringify({ ...playbook, changes, ...(unread ? { changesUnread: unread } : {}), lessons }, null, 1)); return; }
+    console.log([readFileSync(PLAYBOOK_FILE, 'utf8').trim(), '', `THE OWNER'S CHANGES · ${changes.length}`, unread ?? CHANGES_NOTE, ...changes.map((c) => `[${c.situation}] ${changeLine(c)}`),
+      '', `LESSONS for this Owner · ${lessons.length}`, LESSONS_NOTE, ...lessons.map((l) => `[${l.situation}] ${lessonLine(l)}`)].join('\n'));
     return;
   }
   if (!pos.length) {
-    if (flags.json) { console.log(JSON.stringify({ situations: playbook.situations.map(({ name, when }) => ({ name, when, lessons: lessons.filter((l) => l.situation === name).length })), everywhere }, null, 1)); return; }
-    const out = [`PLAYBOOK · ${plural(playbook.situations.length, 'situation')}. Run playbook <situation> for its moves and this Owner's Lessons.`, '', playbook.intro, ''];
+    const { changes } = await ownerChanges(null);
+    const counts = (name) => ({ changes: changes.filter((c) => c.situation === name).length, lessons: lessons.filter((l) => l.situation === name).length });
+    if (flags.json) { console.log(JSON.stringify({ situations: playbook.situations.map(({ name, when }) => ({ name, when, ...counts(name) })), everywhere }, null, 1)); return; }
+    const out = [`PLAYBOOK · ${plural(playbook.situations.length, 'situation')}. Run playbook <situation> for its moves, the Owner's changes, and this Owner's Lessons.`, '', playbook.intro, ''];
     for (const s of playbook.situations) {
-      const n = lessons.filter((l) => l.situation === s.name).length;
-      out.push(`${s.name}${n ? ` · ${plural(n, 'Lesson')}` : ''}`, `    ${s.when}`);
+      const n = counts(s.name);
+      out.push(`${s.name}${n.changes ? ` · ${plural(n.changes, "Owner's change")}` : ''}${n.lessons ? ` · ${plural(n.lessons, 'Lesson')}` : ''}`, `    ${s.when}`);
     }
     if (everywhere.length) out.push('', `LESSONS for every situation · ${everywhere.length}`, LESSONS_NOTE, ...everywhere.map(lessonLine));
     console.log(out.join('\n'));
@@ -699,8 +722,11 @@ async function cmdPlaybook({ pos, flags }) {
   }
   const s = findSituation(playbook, pos.join(' '));
   const own = [...lessons.filter((l) => l.situation === s.name && s.name !== EVERYWHERE), ...everywhere];
-  if (flags.json) { console.log(JSON.stringify({ ...s, lessons: own }, null, 1)); return; }
-  console.log([`PLAYBOOK · ${s.name}`, '', s.text || '(Lessons only)', '', `LESSONS for this Owner · ${own.length}`, LESSONS_NOTE,
+  const { changes, unread } = s.name === EVERYWHERE ? { changes: [], unread: null } : await ownerChanges(s.name);
+  if (flags.json) { console.log(JSON.stringify({ ...s, changes, ...(unread ? { changesUnread: unread } : {}), lessons: own }, null, 1)); return; }
+  console.log([`PLAYBOOK · ${s.name}`, '', s.text || '(Lessons only)', '',
+    ...(s.name === EVERYWHERE ? [] : [`THE OWNER'S CHANGES · ${changes.length}`, unread ?? CHANGES_NOTE, ...(unread ? [] : changes.length ? changes.map(changeLine) : ['(none)']), '']),
+    `LESSONS for this Owner · ${own.length}`, LESSONS_NOTE,
     ...(own.length ? own.map(lessonLine) : ['(none yet)'])].join('\n'));
 }
 
@@ -709,8 +735,19 @@ async function cmdLearn({ pos, flags }) {
   const s = findSituation(readPlaybook(), pos[0] ?? '');
   const by = String(flags.by || 'agent').replace(/[\u0000-\u001f\u007f]/g, '').trim();
   if (!by || RESERVED_AUTHORS.has(by.toLowerCase())) throw new UsageError(`--by ${by || '(empty)'} is reserved. Give your own agent name, such as claude or hermes.`);
-  const r = addLesson({ situation: s.name, text: flags.text === '-' ? readFileSync(0, 'utf8') : flags.text, why: flags.why, by });
+  // --move: the number of the move it changes, as playbook <situation> --json numbers them, so the
+  // Playbook page shows it under that move.
+  let move;
+  if (flags.move !== undefined) {
+    move = s.moves?.find((m) => String(m.n) === String(flags.move))?.text;
+    if (!move) throw new UsageError(`--move takes a move's number in ${s.name}, as ba playbook "${s.name}" --json numbers them. Nothing was saved.`);
+  }
+  const r = addLesson({ situation: s.name, text: flags.text === '-' ? readFileSync(0, 'utf8') : flags.text, why: flags.why, by, ...(move ? { move } : {}) });
   if (r.status === 'duplicate') { console.log(`That Lesson is already saved for ${s.name}, as ${r.lesson.id}. Nothing changed.`); return; }
+  if (r.status === 'removed') throw new UsageError(`Not saved. The Owner removed this Lesson for ${s.name} on the Playbook page. It stays removed.`);
+  // The caps hold for every agent and the Beeper Companion's weekly look together (ADR 0117).
+  if (r.status === 'full' && r.cap === 'situation') throw new UsageError(`Not saved. ${s.name} already has ${SITUATION_CAP} Lessons, the most one situation keeps. The Owner can remove one on the Playbook page to make room. Nothing changed.`);
+  if (r.status === 'full') throw new UsageError(`Not saved. ${WEEK_CAP} Lessons were saved in the last 7 days, the most a week takes, counting the Beeper Companion's weekly look and any the Owner removed since. The next can be saved after ${new Date(r.opens).toLocaleString()}. Nothing changed.`);
   console.log(`Lesson ${r.lesson.id} saved for ${s.name}. Agents read it with the Playbook from now on. It lives in ${lessonsFile()}, where the Owner can read or remove it.`);
 }
 
@@ -1229,9 +1266,10 @@ Notes
   note <chat> --delete <note>         delete a Note. Full mode only
 
 Playbook
-  playbook [<situation>] [--all]      moves for handling people, distilled from books, with what agents learned
-                                      about how this Owner differs. With no situation, the list of situations
-  learn <situation> --text "…" --why "…" [--by <your name>]
+  playbook [<situation>] [--all]      moves for handling people, distilled from books, with the Owner's changes
+                                      and what agents learned about how this Owner differs. With no situation,
+                                      the list of situations
+  learn <situation> --text "…" --why "…" [--move <n>] [--by <your name>]
                                       save a Lesson: how this Owner differs from the Playbook, and what showed it
 
 Write, no Confirmation needed
@@ -1328,20 +1366,25 @@ const ALLOWED = {
   readonly: new Set(['check', 'accounts', 'mode', 'triage', 'chat', 'find', 'who', 'mind', 'people', 'trends', 'search', 'media', 'dismiss', 'undismiss', 'notes', 'playbook', 'app status', 'app replies', 'app voice', 'app auto list', 'app line']),
   drafts: new Set(['check', 'accounts', 'mode', 'triage', 'chat', 'find', 'who', 'mind', 'people', 'trends', 'search', 'media', 'draft', 'suggest', 'notes', 'note', 'playbook', 'learn', 'app status', 'app replies', 'app chat', 'app voice', 'app timeline', 'app auto list', 'app auto off', 'app line', 'app intros', 'app intro prepare', 'app coordinations', 'app round prepare', 'app coordination end', 'app later list', 'app later stop', 'app runs', 'app quiet', 'app quiet off']),
 };
-// Inside a Companion run, readonly may also read the run's Chat record, and save and list Intro cards,
-// which send nothing: the app lets only an Intro request's run save one there, and refuses every
-// other run (ADR 0268).
-const READONLY_IN_RUN = new Set(['app chat', 'app intro prepare', 'app intros']);
+// Inside a Companion run, readonly may also read the run's Chat record.
+const READONLY_IN_RUN = new Set(['app chat']);
+// An Intro request's run is readonly, yet may save and list Intro cards, which send nothing (ADR 0268).
+// No other run may in readonly: refuseByMode returns the kind, and runApp refuses the command unless
+// the app names the run as one of that kind.
+const READONLY_IN_REQUEST = new Set(['app intro prepare', 'app intros']);
+const readOnlyRefusal = (name) => new UsageError(`Read-only mode is on, so "${name}" did not run and nothing changed. Tell the Owner. Only they can loosen the mode.`);
 // modes: an Owner action's own (lib/actions.mjs), from a terminal and inside a Companion run.
+// Returns the run kind the app must confirm, or nothing when the mode allows the command outright.
 function refuseByMode(name, modes) {
   const mode = currentMode();
   if (modes) {
     if (modes[process.env.COMPANION_RUN ? 'run' : 'terminal'].includes(mode)) return;
-    if (mode === 'readonly') throw new UsageError(`Read-only mode is on, so "${name}" did not run and nothing changed. Tell the Owner. Only they can loosen the mode.`);
+    if (mode === 'readonly') throw readOnlyRefusal(name);
     throw new UsageError(`Drafts-only mode is on, so "${name}" did not run and nothing changed. This run may read and save drafts. Anything else waits for the Owner.`);
   }
   if (mode === 'readonly' && !ALLOWED.readonly.has(name) && !(READONLY_IN_RUN.has(name) && process.env.COMPANION_RUN)) {
-    throw new UsageError(`Read-only mode is on, so "${name}" did not run and nothing changed. Tell the Owner. Only they can loosen the mode.`);
+    if (READONLY_IN_REQUEST.has(name) && process.env.COMPANION_RUN) return 'intro-request';
+    throw readOnlyRefusal(name);
   }
   if (mode === 'drafts' && !ALLOWED.drafts.has(name)) {
     const also = name.startsWith('app auto') ? ', and turn Auto off with app auto off' : name.startsWith('app later') ? ', and list or stop Look-agains with app later list and app later stop' : '';
@@ -1386,7 +1429,7 @@ const COMMANDS = { check: cmdCheck, accounts: cmdAccounts, triage: cmdTriage, ch
 // grant Confirmation. Commands without a preview refuse dry-run before doing any work.
 const WRITE_ARGS = {
   mode: [1, ''], dismiss: [1, ''], undismiss: [1, ''], same: [2, 'confirmed'], different: [2, 'confirmed'],
-  note: [1, 'text text-file from by delete'], learn: [1, 'text why by'], draft: [1, 'text text-file replace'],
+  note: [1, 'text text-file from by delete'], learn: [1, 'text why by move'], draft: [1, 'text text-file replace'],
   suggest: [1, 'text text-file steps agent after'],
   send: [1, 'file text text-file after reply-to confirmed at in until list every'], read: [1, ''], react: [3, 'confirmed'],
   remind: [1, 'when dismiss-on-message'], unremind: [1, ''], edit: [2, 'text text-file confirmed'],
@@ -1412,8 +1455,8 @@ async function main() {
     const app = await import('./lib/app.mjs');
     let plan;
     try { plan = app.appCommand(rest); } catch (e) { throw new UsageError(e.message); }
-    refuseByMode(`app ${plan.command}`, plan.modes);
-    await app.runApp(rest);
+    const runKind = refuseByMode(`app ${plan.command}`, plan.modes);
+    await app.runApp(rest, runKind ? { runKind, refused: readOnlyRefusal(`app ${plan.command}`) } : {});
     return;
   }
   const fn = COMMANDS[name];

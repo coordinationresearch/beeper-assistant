@@ -31,7 +31,14 @@ const oneChat = (rest) => { if (rest.length !== 1 || !exactChatID(rest[0])) thro
 const chatBody = (body) => keys(body, ['chatID']) && exactChatID(body.chatID);
 // An Intro's ID, as `ba group` and `ba app intros` print it (lib/app.mjs INTRO_ID).
 const INTRO_ID = /^i[0-9a-f]{8}$/;
+// The networks whose downloads the Corpus reads (src/corpus/imports.ts IMPORT_NETWORKS).
+const historyNetwork = (value) => value === 'linkedin';
+const absolutePath = (value) => typeof value === 'string' && value.startsWith('/') && value.length <= 4096 && !/[\x00-\x1f\x7f]/.test(value);
 const choiceID = (value) => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(value);
+// Settings → Agent's Model and Effort rows (ADR 0271): pick, own, or a model ID as a Harness takes it on
+// its command line (model-choice.ts modelName). The app checks the value is one the row offers.
+const modelChoice = (value) => typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:/@[\]-]{0,127}$/.test(value);
+const EFFORT_CHOICES = ['pick', 'own', 'low', 'medium', 'high', 'xhigh', 'max'];
 
 const contactField = (value, max) => value === undefined || (typeof value === 'string' && value.length <= max && !/[\x00-\x1f\x7f]/.test(value));
 const namePart = value => typeof value === 'string' && value.length <= 100 && !/[\x00-\x1f\x7f]/.test(value);
@@ -50,6 +57,11 @@ const lineText = value => typeof value === 'string' && Boolean(value.trim()) && 
 const WIDER = ['chat', 'person', 'global'];
 const instructionID = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,128}$/.test(value);
 const noteID = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value);
+// A Playbook situation in words, a move's number in it, and a Lesson's id (lib/playbook.mjs).
+const situationWords = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 200 && !/[\x00-\x1f\x7f]/.test(value);
+const MOVE = /^[1-9]\d?$/;
+const moveNumber = value => Number.isSafeInteger(value) && value >= 1 && value <= 99;
+const LESSON_ID = /^l[0-9a-f]{7}$/;
 const personBody = b => keys(b, ['personID']) && personID(b.personID);
 const incidentID = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
 const incidentSelection = value => {
@@ -274,6 +286,42 @@ export const ACTIONS = [
   { name: 'note delete', route: '/note/delete', usage: 'ba app note delete <chatID> <noteID>', modes: both(FULL), callers: OWNER, late: false,
     parse: rest => { if (rest.length !== 2 || !exactChatID(rest[0]) || !noteID(rest[1])) throw Error('usage'); return { chatID: rest[0], noteID: rest[1] }; },
     check: b => keys(b, ['chatID', 'noteID']) && exactChatID(b.chatID) && noteID(b.noteID), chats: b => [b.chatID] },
+  // Home's Playbook page (ADR 0109). The Owner's change to a move is a standing instruction
+  // whose scope is its situation, and outranks the move and the Lessons. <situation> is a title, or
+  // words that name one, as ba playbook takes them; <move> a move's number there, as ba playbook
+  // <situation> --json numbers them. The read is what every run gets with ba playbook <situation>,
+  // so the app's own runs read it too, late or not.
+  { name: 'playbook', route: '/playbook', usage: 'ba app playbook [<situation>]', modes: both(ALL), callers: [...OWNER, 'app', 'woken'], late: true, read: true,
+    parse: rest => { const words = rest.join(' ').trim(); if (words && !situationWords(words)) throw Error('usage'); return words ? { situation: words } : {}; },
+    check: b => keys(b, [], ['situation']) && (b.situation === undefined || situationWords(b.situation)), chats: () => [] },
+  // A change saves the Owner's own words in the Ask you are in, as ba app instruction does: in place
+  // of that move, or with add, for the whole situation. Only an Ask makes one.
+  { name: 'playbook change', route: '/playbook/change', usage: 'ba app playbook change <situation> <move>', modes: both(FULL), callers: ['ask'], late: false,
+    parse: rest => { const n = rest.at(-1), words = rest.slice(0, -1).join(' ').trim(); if (!situationWords(words) || !MOVE.test(n ?? '')) throw Error('usage'); return { situation: words, move: Number(n) }; },
+    check: b => keys(b, ['situation', 'move']) && situationWords(b.situation) && moveNumber(b.move), chats: () => [] },
+  { name: 'playbook add', route: '/playbook/add', usage: 'ba app playbook add <situation>', modes: both(FULL), callers: ['ask'], late: false,
+    parse: rest => { const words = rest.join(' ').trim(); if (!situationWords(words)) throw Error('usage'); return { situation: words }; },
+    check: b => keys(b, ['situation']) && situationWords(b.situation), chats: () => [] },
+  { name: 'playbook cut', route: '/playbook/cut', usage: 'ba app playbook cut <situation> <move> --confirmed', modes: both(FULL), callers: OWNER, late: false,
+    parse: rest => {
+      if (rest.at(-1) !== '--confirmed') throw Error('usage');
+      const n = rest.at(-2), words = rest.slice(0, -2).join(' ').trim();
+      if (!situationWords(words) || !MOVE.test(n ?? '')) throw Error('usage');
+      return { situation: words, move: Number(n), confirmed: true };
+    },
+    check: b => keys(b, ['situation', 'move', 'confirmed']) && situationWords(b.situation) && moveNumber(b.move) && b.confirmed === true, chats: () => [] },
+  // The Owner's change by the id ba app playbook prints: Undo gives back the one it replaced, and
+  // remove takes it off, so the shipped move applies again.
+  { name: 'playbook undo', route: '/playbook/undo', usage: 'ba app playbook undo <instructionID>', modes: both(FULL), callers: OWNER, late: false,
+    parse: rest => { if (rest.length !== 1 || !instructionID(rest[0])) throw Error('usage'); return { id: rest[0] }; },
+    check: b => keys(b, ['id']) && instructionID(b.id), chats: () => [] },
+  { name: 'playbook remove', route: '/playbook/remove', usage: 'ba app playbook remove <instructionID> --confirmed', modes: both(FULL), callers: OWNER, late: false,
+    parse: rest => { if (rest.length !== 2 || !instructionID(rest[0]) || rest[1] !== '--confirmed') throw Error('usage'); return { id: rest[0], confirmed: true }; },
+    check: b => keys(b, ['id', 'confirmed']) && instructionID(b.id) && b.confirmed === true, chats: () => [] },
+  // A Lesson by the id ba playbook prints (ADR 0117). Removed, no agent saves it again.
+  { name: 'playbook lesson remove', route: '/playbook/lesson/remove', usage: 'ba app playbook lesson remove <lessonID> --confirmed', modes: both(FULL), callers: OWNER, late: false,
+    parse: rest => { if (rest.length !== 2 || !LESSON_ID.test(rest[0]) || rest[1] !== '--confirmed') throw Error('usage'); return { id: rest[0], confirmed: true }; },
+    check: b => keys(b, ['id', 'confirmed']) && typeof b.id === 'string' && LESSON_ID.test(b.id) && b.confirmed === true, chats: () => [] },
   // Pause Background Work (the menu bar's right-click menu, Settings): stops what spends tokens on its
   // own. Stopping only stops, so a late run and a drafts-only run may.
   { name: 'pause', route: '/pause', usage: 'ba app pause', modes: both(NOT_READONLY), callers: OWNER, late: true, parse: none, check: empty, chats: () => [] },
@@ -356,6 +404,17 @@ export const ACTIONS = [
     parse: none, check: empty, chats: () => [] },
   { name: 'diagnostics on', route: '/diagnostics/on', usage: 'ba app diagnostics on', modes: both(FULL), callers: OWNER, late: false,
     parse: none, check: empty, chats: () => [] },
+  // A network's own data download into the Message Corpus (docs/plans/history-import.md), as the
+  // LinkedIn history row in Settings does: how each stands, a download to bring in (its .zip, the
+  // folder it unpacked to, or its messages file, by absolute path), or its history taken back out.
+  { name: 'history view', route: '/history/view', usage: 'ba app history view', modes: both(ALL), callers: OWNER, late: false, read: true,
+    parse: none, check: empty, chats: () => [] },
+  { name: 'history import', route: '/history/import', usage: 'ba app history import <linkedin> <absolute path>', modes: both(NOT_READONLY), callers: OWNER, late: false, timeoutMs: 600_000,
+    parse: (rest) => { if (rest.length !== 2 || !historyNetwork(rest[0]) || !absolutePath(rest[1])) throw new Error('usage'); return { network: rest[0], path: rest[1] }; },
+    check: (b) => keys(b, ['network', 'path']) && historyNetwork(b.network) && absolutePath(b.path), chats: () => [] },
+  { name: 'history remove', route: '/history/remove', usage: 'ba app history remove <linkedin> --confirmed', modes: both(NOT_READONLY), callers: OWNER, late: false, timeoutMs: 600_000,
+    parse: (rest) => { if (rest.length !== 2 || !historyNetwork(rest[0]) || rest[1] !== '--confirmed') throw new Error('usage'); return { network: rest[0], confirmed: true }; },
+    check: (b) => keys(b, ['network', 'confirmed']) && historyNetwork(b.network) && b.confirmed === true, chats: () => [] },
   { name: 'incident open', route: '/incident/open', usage: 'ba app incident open', modes: both(ALL), callers: OWNER, late: true,
     parse: none, check: empty, chats: () => [] },
   { name: 'incident list', route: '/incident/list', usage: 'ba app incident list', modes: both(ALL), callers: OWNER, late: true, read: true,
@@ -376,6 +435,16 @@ export const ACTIONS = [
   // Uninstall (Settings → Data): the app asks the Owner on the Mac, as its button does, and only
   // their click there removes anything. An agent can start it, never finish it.
   { name: 'uninstall', route: '/uninstall', usage: 'ba app uninstall', modes: both(FULL), callers: OWNER, late: false, parse: none, check: empty, chats: () => [] },
+  // Settings → Agent's Model and Effort rows (ADR 0271), for the Harness in use: the rows as the Owner
+  // sees them, and a choice of what they offer. A choice can raise what every call costs, so only a
+  // run in full mode makes one, never late.
+  { name: 'model', route: '/model', usage: 'ba app model', modes: both(ALL), callers: OWNER, late: true, read: true, parse: none, check: empty, chats: () => [] },
+  { name: 'model set', route: '/model/set', usage: 'ba app model set <pick|own|model>', modes: both(FULL), callers: OWNER, late: false,
+    parse: rest => { if (rest.length !== 1 || !modelChoice(rest[0])) throw Error('usage'); return { model: rest[0] }; },
+    check: b => keys(b, ['model']) && modelChoice(b.model), chats: () => [] },
+  { name: 'effort set', route: '/effort/set', usage: `ba app effort set <${EFFORT_CHOICES.join('|')}>`, modes: both(FULL), callers: OWNER, late: false,
+    parse: rest => { if (rest.length !== 1 || !EFFORT_CHOICES.includes(rest[0])) throw Error('usage'); return { effort: rest[0] }; },
+    check: b => keys(b, ['effort']) && EFFORT_CHOICES.includes(b.effort), chats: () => [] },
 ];
 
 // The action these words name, longest name first, with the words after it, or null.

@@ -48,8 +48,15 @@ Settled, the Chat is free. Answers are JSON: `{ "ok": true, "settled": "sent" }`
 | `ba app reply stop <chatID>` | Stop on a Reply that is sending there: its waiting Steps are cancelled. What already went stays sent |
 | `ba app uninstall` | Uninstall in Settings → Data: the Companion asks the Owner on the Mac whether to remove itself and what it keeps. Nothing goes unless they click Uninstall there |
 | `ba app brief <chatID>` | Brief now: writes that Chat's Brief and prints it as JSON in `brief`, or gives back the saved one (`reused: true`) when it already read the newest message. The sidebar shows it when the Owner opens the Chat |
+| `ba app model` | Reads Settings → Agent's Model and Effort rows for the agent in use: each one's `value`, its `options` with their labels, and its `note`. `warn` is true when a call on the Owner's choice failed and ran on Companion's pick. `effort` is null On this Mac |
+| `ba app model set <pick\|own\|model>` | The Model row, for the agent in use: `pick` is Companion's pick, `own` is whatever the Owner's own setup of that agent runs, or a `value` from `ba app model`'s options. Every call takes it except the Asks the Owner starts, which run on their own setup, and Auto's replies, which always use Companion's pick. Refused for a value the row doesn't offer |
+| `ba app effort set <pick\|own\|low\|medium\|high\|xhigh\|max>` | The Effort row, the same way. On this Mac has none |
 
 Each answers JSON with `ok`, and a fixed `message` when it changed nothing. Do these when the Owner asks, or when what they asked plainly needs one, and say what you changed.
+
+## Older history from a network's download
+
+Beeper keeps about 20 messages per LinkedIn Chat. LinkedIn's own data download holds the rest. `ba app history view` says what each network's download brought into the Message Corpus. When the Owner points at a download, run `ba app history import linkedin <absolute path>` with the `.zip` LinkedIn sent, the folder it unpacked to, or its `messages.csv`. It answers with how many messages came in, how many the Corpus already had, and the group conversations it held back. A LinkedIn file with no messages is the first of two parts; say the second usually follows within a day. `ba app history remove linkedin --confirmed` takes the imported history back out, only when the Owner asked.
 
 ## Diagnostics and private Incidents
 
@@ -180,13 +187,27 @@ Auto mode is you, the same agent, answering one Chat by yourself as the Owner. I
 
 ## Standing instructions
 
-`ba app instruction <chatID> <chat|person|global>` saves the Owner's words from the Companion run you are in as a standing instruction for that Chat's person (`person`), that Chat only (`chat`), or every Chat (`global`). It is the sidebar's save, with its Undo. The Companion takes the words from the run itself, so the command carries none. It saves `global` only when those words say so, such as "all my chats", "all replies", or "everywhere"; otherwise it refuses, and you save it for the Chat and ask whether they want it everywhere. Words that only point back at an earlier instruction, such as "use that in all my chats", are not an instruction to save: the Companion widens the one they point to before your turn starts, and `ba app instruction` refuses them. Outside a Companion run nothing is saved.
+`ba app instruction <chatID> <chat|person|global>` saves the Owner's words from the Companion run you are in as a standing instruction for that Chat's person (`person`), that Chat only (`chat`), or every Chat (`global`). It is the sidebar's save, with its Undo. The Companion takes the words from the run itself, so the command carries none. It saves `global` only when those words say so, such as "all my chats", "all replies", or "everywhere"; otherwise it refuses, and you save it for the Chat and ask whether they want it everywhere. Words that only point back at an earlier instruction, such as "use that in all my chats", are not an instruction to save, and `ba app instruction` refuses them. When this Ask or the one before it remembered an instruction, the Companion widens it before your turn starts. Otherwise the save result says nothing was widened: if the conversation shows which of the Chat's instructions they mean, widen that one with `widen` and say which; if "that" is something else, such as a summary or a Draft, widen nothing. Outside a Companion run nothing is saved.
 
 `ba app remember <chatID> <who|now|you|talk|history> <fact…>` saves a fact the Owner told the Companion run you are in about the person in that Chat, as the Owner's own line in that person's Person File, marked "you told the agent" with the date. Every word of the fact, past small ones like "your", must come from the Owner's words in this run, or the Companion refuses it. A misspelling of theirs may be fixed, but a number or a "not" must match what they wrote. A group, or someone the Owner hasn't written to, gets nothing. Outside a Companion run nothing is saved.
 
 `ba app forget <chatID> <fact…>` takes back a fact the Owner told the agent, when their words in the run you are in say it is wrong. Give the line's words as the Person File shows them, without "(you told the agent, ...)". Only a line they told the agent can go this way, never one they typed into the file, and their words in this run must name most of it and say it is wrong, with a "not" or a word such as "wrong" or "forget". The JSON says `"ok": true` when the line is gone, and `"status": "none"` when no fact they told the agent reads like that.
 
 `ba app instruction edit <instructionID>` replaces one standing instruction with the Owner's words in the Companion run you are in, in the same scope. Use it when their words in this run change an instruction they gave before. It changes only one that applies where the run is: that Chat's, that Chat's person's, or one for everywhere. Name it by the `id` that `ba app chat` prints under `instructions`. The Companion takes the words from the run, so the command carries none, and only an Ask can run it. `ba app instruction undo <instructionID>` takes back an active instruction and gives back the one it replaced, if any. `ba app instruction delete <instructionID> --confirmed` deletes one for good, with the versions it replaced, and only on the Owner's word. `ba app instruction widen <instructionID> <chat|person|global>` saves an instruction's same words again for a wider scope, such as every Chat, and keeps the narrower one; its Undo takes back only the widening. Only an Ask can run it, and only when the Owner's words in it name that scope, such as "use that in all my chats". These run the same functions as the sidebar's Undo, Use everywhere, and Delete and a Person page's Edit, Undo, and Delete.
+
+## The Owner's changes to the Playbook
+
+The Playbook page in the Companion's Home shows the Playbook as one document. A change the Owner makes to a move there is a standing instruction for that situation, and it outranks the move and the Lessons. `ba playbook <situation>` prints the changes under the moves, so you read them with it. These commands run the same functions as the page's buttons. Name a situation as `ba playbook` does, and a move by its `n`, as `ba playbook <situation> --json` numbers its moves.
+
+| Command | Does |
+|---|---|
+| `ba app playbook [<situation>]` | the Owner's changes, for one situation or all, as JSON. Any run may read them |
+| `ba app playbook change <situation> <move>` | saves the Owner's words in the Companion run you are in in place of that move. Only an Ask can run it, and the command carries no words |
+| `ba app playbook add <situation>` | saves the Owner's words in the run you are in for the whole situation. Only an Ask can run it |
+| `ba app playbook cut <situation> <move> --confirmed` | cuts that move, only on the Owner's word |
+| `ba app playbook undo <instructionID>` | takes back a change and gives back the one it replaced, if any |
+| `ba app playbook remove <instructionID> --confirmed` | removes a change, so the move applies as shipped |
+| `ba app playbook lesson remove <lessonID> --confirmed` | removes a Lesson. No agent saves the same one again |
 
 ## A Person's File
 
@@ -290,10 +311,10 @@ When a Chat turns Urgent, the Companion tells the Owner once: on the Line while 
 
 | Command | readonly | drafts | full |
 |---|---|---|---|
-| `status`, `replies`, `voice`, `auto list`, `line`, `sends`, `person file` | yes | yes | yes |
+| `status`, `replies`, `voice`, `auto list`, `line`, `sends`, `person file`, `playbook` | yes | yes | yes |
 | `chat`, `timeline`, `intros`, `intro prepare`, `coordinations`, `round prepare`, `later list`, `runs` | no, but `chat` inside a Companion run | yes | yes |
 | `auto off`, `intro pass`, `later stop`, `quiet`, `quiet off`, `coordination end`, `pause`, `reply stop`, `reply leave out first`, `brief`, `person write` | no | yes | yes |
-| `auto on`, `goal`, `clear`, `pick`, `go`, `instruction`, `instruction edit`, `undo`, `widen`, and `delete`, `remember`, `forget`, `person line edit`, `remove`, `add`, and `undo`, `person loop done`, `note delete`, `intro make`, `round make`, `later`, `later resume`, `pause off`, `check now`, `keep drafting`, `sidebar tip dismiss`, `send settle`, `uninstall` | no | no | yes |
+| `auto on`, `goal`, `clear`, `pick`, `go`, `instruction`, `instruction edit`, `undo`, `widen`, and `delete`, `remember`, `forget`, `person line edit`, `remove`, `add`, and `undo`, `person loop done`, `note delete`, `playbook change`, `add`, `cut`, `undo`, `remove`, and `lesson remove`, `intro make`, `round make`, `later`, `later resume`, `pause off`, `check now`, `keep drafting`, `sidebar tip dismiss`, `send settle`, `uninstall` | no | no | yes |
 
 A Line text read late runs in drafts mode.
 

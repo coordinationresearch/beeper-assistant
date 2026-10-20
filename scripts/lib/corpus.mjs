@@ -7,6 +7,10 @@ import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { formatMedia, linkParts } from './media-context.mjs';
 
+// The Beeper Chat ID of a Corpus Chat: its own key for a bridged Chat, the link the Corpus made
+// for iMessage, and none for a Chat made from a network's download alone (export:<network>:…).
+export const beeperChatOf = (c) => c.beeper_chat_id || (c.chat_key.startsWith('imessage:') || c.chat_key.startsWith('export:') ? null : c.chat_key);
+
 export const corpusPath = () => process.env.BEEPER_ASSISTANT_CORPUS || join(homedir(), 'Library', 'Application Support', 'Beeper Companion', 'corpus.db');
 
 // The schema this reader was written against. A newer corpus that still has it works.

@@ -238,3 +238,54 @@ test('an instruction by its ID goes through the table, and the older save keeps 
   assert.deepEqual(appCommand(['instruction', SAM, 'person']).payload, { chatID: SAM, scope: 'person' });
   assert.throws(() => appCommand(['instruction', SAM, '--person']), /takes no flags|not supported/);
 });
+
+test("ba playbook prints the Owner's changes the Companion vouches for, above the Lessons, and in a read-only run too", async t => {
+  const changes = [
+    { id: 'i-moved', situation: 'Hard news', move: 'Check in later without being asked.', n: 6, cut: false, text: 'Check in on the hard date only.', at: '2026-10-18T12:00:00.000Z' },
+    { id: 'i-cut', situation: 'Hard news', move: 'Joining the outrage at the boss.', n: 9, cut: true, text: '', at: '2026-10-18T12:00:00.000Z' },
+    { id: 'i-whole', situation: 'Hard news', move: null, n: null, cut: false, text: 'Never send a link.', at: '2026-10-18T12:00:00.000Z' },
+  ];
+  const app = await fakeApp(t, { answer: { ok: true, changes } });
+  const shown = await ba(envFor(app, { BEEPER_ASSISTANT_MODE: 'readonly', COMPANION_RUN: 'run-invented' }), ['playbook', 'hard', 'news']);
+  assert.equal(shown.status, 0, shown.stderr);
+  assert.deepEqual(app.requests.at(-1), { method: 'POST', path: '/playbook', run: 'run-invented', body: { situation: 'Hard news' } });
+  assert.match(shown.stdout, /THE OWNER'S CHANGES · 3\nThe Owner's own words for this situation/);
+  assert.match(shown.stdout, /^- Instead of the move "Check in later without being asked\.": "Check in on the hard date only\." \(the Owner, 2026-10-18, i-moved\)$/m);
+  assert.match(shown.stdout, /^- Cut the move "Joining the outrage at the boss\."\. Don't use it\./m);
+  assert.match(shown.stdout, /^- For this whole situation: "Never send a link\."/m);
+  assert.ok(shown.stdout.indexOf("THE OWNER'S CHANGES") < shown.stdout.indexOf('LESSONS for this Owner'));
+  const json = JSON.parse((await ba(envFor(app), ['playbook', 'Hard news', '--json'])).stdout);
+  assert.deepEqual(json.changes, changes);
+  const unreadable = await fakeApp(t, { answer: { ok: true, changes: [{ id: 'x' }] } });
+  assert.match((await ba(envFor(unreadable), ['playbook', 'Hard news'])).stdout, /Not read: Beeper Companion gave an answer ba can't read/);
+  const old = await fakeApp(t, { actions: ['pause'], answer: { ok: true, changes } });
+  assert.match((await ba(envFor(old), ['playbook', 'Hard news'])).stdout, /Not read: this Beeper Companion is older/);
+});
+
+test('the Playbook page commands make exactly their requests', async t => {
+  const app = await fakeApp(t);
+  const change = await ba(envFor(app), ['app', 'playbook', 'change', 'Hard', 'news', '3']);
+  assert.equal(change.status, 0, change.stderr);
+  assert.deepEqual(app.requests.at(-1).body, { situation: 'Hard news', move: 3 });
+  assert.equal((await ba(envFor(app), ['app', 'playbook', 'cut', 'Hard news', '3', '--confirmed'])).status, 0);
+  assert.deepEqual(app.requests.at(-1), { method: 'POST', path: '/playbook/cut', run: null, body: { situation: 'Hard news', move: 3, confirmed: true } });
+  assert.deepEqual(appCommand(['playbook', 'lesson', 'remove', 'l1234abc', '--confirmed']).payload, { id: 'l1234abc', confirmed: true });
+  assert.deepEqual(appCommand(['playbook', 'remove', 'i-whole', '--confirmed']).path, '/playbook/remove');
+  assert.equal((await ba(envFor(app, { BEEPER_ASSISTANT_MODE: 'drafts' }), ['app', 'playbook', 'cut', 'Hard news', '3', '--confirmed'])).status, 2, 'only full mode changes the Playbook');
+});
+
+test('the Model and Effort rows\' commands: the read runs anywhere, a choice only in full mode', async t => {
+  const plan = args => { const p = appCommand(args); return [p.command, p.path, p.payload]; };
+  assert.deepEqual(plan(['model']), ['model', '/model', {}]);
+  assert.deepEqual(plan(['model', 'set', 'gpt-6.1-sol']), ['model set', '/model/set', { model: 'gpt-6.1-sol' }]);
+  assert.deepEqual(plan(['effort', 'set', 'pick']), ['effort set', '/effort/set', { effort: 'pick' }]);
+  for (const args of [['model', 'opus'], ['model', 'set'], ['model', 'set', 'opus', 'now'], ['effort', 'set', 'ultra'], ['effort']]) assert.throws(() => appCommand(args), /Usage:/, args.join(' '));
+  const app = await fakeApp(t);
+  for (const [args, mode, status] of [[['model'], 'readonly', 0], [['model', 'set', 'opus'], 'drafts', 2], [['effort', 'set', 'high'], 'readonly', 2], [['model', 'set', 'own'], 'full', 0]]) {
+    app.requests.length = 0;
+    const r = await ba(envFor(app, { BEEPER_ASSISTANT_MODE: mode }), ['app', ...args]);
+    assert.equal(r.status, status, `${args.join(' ')} in ${mode}: ${r.stderr}`);
+    if (status) assert.deepEqual(app.requests, []);
+    else assert.deepEqual(app.requests.at(-1).body, appCommand(args).payload);
+  }
+});

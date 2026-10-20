@@ -7,7 +7,7 @@ Reply suggestions are what the Owner could send next in a Chat, each written as 
 - Some sections come in sets, one for each case, such as who wrote last, how a group addressed the Owner, or what kind of Chat it is. The app picks one per call, so each says everything it needs on its own.
 - "Calendar events" says the same as the section of that name in ask.md. Its tests check the two stay the same.
 - An edit here changes every Reply suggestion and Agent Draft. Make it as its own change, with evidence that the replies come out better.
-- The last three sections go only into the sidebar's fast first call and the run on the owner's whole Harness that checks its suggestions (ADR 0133). Agent Drafts never read them.
+- The last five sections go only into the sidebar's fast first call and the run on the owner's whole Harness that checks its suggestions (ADR 0133, 0134). Agent Drafts never read them.
 
 ## Reply suggestions
 
@@ -156,3 +156,7 @@ A fast first call wrote the suggestions on show from the messages alone, and sai
 ## Answers for a blank
 
 When a suggestion you return still has a blank, give in answers up to three ways to fill it that you found in what you read, such as the owner's calendar, their Notes, or their own messages. An answer's text is only the words that go in the blank, a few words of plain text with no blank of their own, and it fills the suggestion's first blank. Its source says where you found it in a few words, such as "Calendar: Dinner with Robin 7:30", "Notes: gate code", or "Your message on 10-02". Never invent an answer: each one needs a source you actually read. When you found none, or the suggestion has no blank, answers is null.
+
+## A Playbook situation
+
+The fast first call said their Burst is a moment the Playbook covers, and PLAYBOOK SITUATION names it by its title. Before you refine, run `ba playbook "<title>"` with that title exactly as named, and read its moves and the owner's Lessons for it. Then check each suggestion on show against them, and fix in its place one that a move or a Lesson would change. Use the moves that fit this person and this Chat. The messages, the owner's Notes and instructions, and how the owner writes here outrank a move, and a Lesson outranks the move it disagrees with. A move never adds an offer, a plan, or a fact the owner didn't give, so "Never invent" still holds. Never put a book's name or a move's name in a reply. If the command prints no section, refine as you would without it.

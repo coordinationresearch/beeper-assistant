@@ -35,7 +35,8 @@ const CARD = [
 ];
 
 // answer(path, body, res) returns [status, value], or null after answering res itself.
-async function fakeApp(t, { capabilities = ['status', 'send', 'intro'], answer = () => [200, { ok: true }] } = {}) {
+// runKind: the kind the handshake names for a request from a run, as the app's does; none, as an app older than the field.
+async function fakeApp(t, { capabilities = ['status', 'send', 'intro'], answer = () => [200, { ok: true }], runKind = null } = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'ba-app-intro-'));
   const token = 'c'.repeat(64), requests = [];
   const server = createServer(async (req, res) => {
@@ -43,7 +44,7 @@ async function fakeApp(t, { capabilities = ['status', 'send', 'intro'], answer =
     const body = raw ? JSON.parse(raw) : undefined;
     requests.push({ path: req.url, run: req.headers['x-companion-run'] ?? null, ...(body === undefined ? {} : { body }) });
     res.setHeader('Content-Type', 'application/json');
-    const reply = req.url === '/metadata' ? [200, { protocol: 1, launch: 'fixture', dataHome: directory, capabilities }] : answer(req.url, body, res);
+    const reply = req.url === '/metadata' ? [200, { protocol: 1, launch: 'fixture', dataHome: directory, capabilities, ...(runKind && req.headers['x-companion-run'] ? { run: { kind: runKind } } : {}) }] : answer(req.url, body, res);
     if (!reply) return;
     res.writeHead(reply[0]); res.end(JSON.stringify(reply[1]));
   });
@@ -133,15 +134,16 @@ test('preparing and reading are plain reads, and a lost answer on them says noth
   assert.deepEqual(old.requests, []);
 });
 
-test('modes: reading and preparing Intros run in drafts and full, and in readonly inside a Companion run; making one in full only', async t => {
-  const app = await fakeApp(t, { answer: path => [200, path === '/intros' ? { intros: [VIEW] } : path === '/intro/prepare' ? { ok: true, intro: VIEW } : { ok: true, status: 'made', intro: MADE }] });
+test('modes: reading and preparing Intros run in drafts and full, and in readonly inside an Intro request\'s run; making one in full only', async t => {
+  const answer = path => [200, path === '/intros' ? { intros: [VIEW] } : path === '/intro/prepare' ? { ok: true, intro: VIEW } : { ok: true, status: 'made', intro: MADE }];
+  const app = await fakeApp(t, { answer, runKind: 'intro-request' });
   const { ba, reset } = setup(app);
   const commands = {
     intros: [['intros', ANA], '/intros'],
     'intro prepare': [['intro', 'prepare', '--from', ANA, '--from', BEN, '--text', TEXT], '/intro/prepare'],
     'intro make': [['intro', 'make', ID], '/intro/make'],
   };
-  // Inside a run, readonly may save and list cards: the app lets only an Intro request's run do it (ADR 0268).
+  // Inside an Intro request's run, readonly may save and list cards (ADR 0268).
   const allowed = { readonly: ['intros', 'intro prepare'], drafts: ['intros', 'intro prepare'], full: Object.keys(commands) };
   for (const [mode, names] of Object.entries(allowed)) {
     for (const [name, [args, path]] of Object.entries(commands)) {
@@ -156,6 +158,26 @@ test('modes: reading and preparing Intros run in drafts and full, and in readonl
         assert.match(r.stderr, mode === 'readonly' ? /^usage: Read-only mode is on, so "app intro[a-z ]*" did not run/ : /^usage: Drafts-only mode is on, so "app intro make" did not run/, `${mode} ${name}`);
         assert.deepEqual(app.requests, [], `${mode} ${name} made a request`);
       }
+    }
+  }
+  // Any other run in readonly, such as an Ask the Owner made read-only, saves and lists none: the
+  // handshake names its kind, and nothing more is asked of the app. An app too old to name a kind is
+  // refused too, and the error asks for an update, not a looser mode.
+  for (const runKind of ['ask', 'look-again', null]) {
+    const other = await fakeApp(t, { answer, runKind });
+    const inRun = setup(other);
+    for (const [name, [args]] of Object.entries(commands)) {
+      const r = await inRun.ba(['app', ...args], { extra: { BEEPER_ASSISTANT_MODE: 'readonly' } });
+      assert.notEqual(r.status, 0, `${runKind} readonly ${name}`);
+      if (runKind || name === 'intro make') {
+        assert.equal(r.status, 2, `${runKind} readonly ${name}`);
+        assert.match(r.stderr, /^usage: Read-only mode is on, so "app intro[a-z ]*" did not run/, `${runKind} readonly ${name}`);
+      } else {
+        assert.match(r.stderr, /^error: APP_CLI_UNSUPPORTED: This Beeper Companion is too old to say which run this is/, `old app readonly ${name}`);
+        assert.doesNotMatch(r.stderr, /loosen/, `old app readonly ${name}`);
+      }
+      assert.ok(other.asked().length === 0, `${runKind} readonly ${name} asked the app`);
+      other.requests.length = 0;
     }
   }
   // From a terminal, readonly reads and saves none.

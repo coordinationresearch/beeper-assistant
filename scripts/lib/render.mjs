@@ -1,4 +1,5 @@
 // Compact text output. Everything written by other people goes inside «…».
+import { beeperChatOf } from './corpus.mjs';
 import { networkName } from './network-names.mjs';
 import { participantTotal } from './beeper.mjs';
 import { chatAlias, messageAlias } from './state.mjs';
@@ -278,8 +279,8 @@ export function span(s) {
 export function renderWho(p, { now = Date.now(), builtAt = null, chatRef = (id) => id } = {}) {
   const out = [`WHO · ${p.display_name || '(no name)'}${p.state === 'conflicted' ? ' · identity conflict' : ''}`];
   for (const c of p.chats.slice(0, 15)) {
-    const id = c.beeper_chat_id || (c.chat_key.startsWith('imessage:') ? null : c.chat_key);
-    const ref = id ? chatRef(id) : '(not linked to Beeper yet, use find)';
+    const id = beeperChatOf(c);
+    const ref = id ? chatRef(id) : c.chat_key.startsWith('export:') ? '(from a download, not in Beeper)' : '(not linked to Beeper yet, use find)';
     const last = c.last_at ? `last ${ago(now - c.last_at)}` : 'no messages';
     out.push(`${ref}  ${networkName(c.network)} · ${plural(c.messages, 'message')} · ${last}`);
   }
