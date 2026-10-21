@@ -484,20 +484,20 @@ async function cmdSearch({ pos, flags }) {
   if (flags['opens-group']) return searchOpeners(query, flags);
   const media = flags.media ? String(flags.media).toLowerCase().split(',').map((x) => x.trim()).filter(Boolean) : [];
   for (const m of media) if (!SEARCH_MEDIA.includes(m)) throw new UsageError(`--media takes ${SEARCH_MEDIA.join(', ')}. Join several with commas.`);
-  const from = flags.from ? String(flags.from).toLowerCase() : null;
-  if (from && from !== 'me' && from !== 'them') throw new UsageError('--from takes me or them');
+  const from = flags.from ? String(flags.from).toLowerCase() : null, kind = flags.kind === undefined ? null : String(flags.kind).toLowerCase();
+  if (from && from !== 'me' && from !== 'them') throw new UsageError('--from takes me or them'); else if (kind !== null && kind !== 'single' && kind !== 'group') throw new UsageError('--kind takes single (one-to-one Chats) or group');
   const days = flags.days === undefined ? 0 : Number(flags.days);
   if (flags.days !== undefined && !(days > 0)) throw new UsageError('--days must be a positive number');
   const max = flags.max === undefined ? 20 : Number(flags.max);
   if (!(Number.isInteger(max) && max >= 1 && max <= 100)) throw new UsageError('--max must be between 1 and 100');
   if (flags.members !== undefined) throw new UsageError('--members goes with --opens-group');
-  if (!query && !media.length) throw new UsageError('Usage: search <words> [--chat <chat>] [--from me|them] [--media image,video,file,link,any] [--days N] [--max 20]. Give words, --media, or --opens-group.');
+  if (!query && !media.length) throw new UsageError('Usage: search <words> [--chat <chat>] [--from me|them] [--kind single|group] [--media image,video,file,link,any] [--days N] [--max 20]. Give words, --media, or --opens-group.');
 
   const state = loadState();
   const chat = flags.chat ? await resolveChat(flags.chat, state) : null;
   const sinceMs = days ? Date.now() - days * DAY : 0;
-  const found = await searchMessages({ query, chatID: chat && chat.id, sender: from === 'them' ? 'others' : from, media }, { max, sinceMs, keep: (m) => !m.isHidden && previewKind(m) !== 'reaction' });
-  const cached = await searchMedia({ query, chatID: chat?.id, from, media, sinceMs, max });
+  const found = await searchMessages({ query, chatID: chat && chat.id, sender: from === 'them' ? 'others' : from, media, kind }, { max, sinceMs, keep: (m) => !m.isHidden && previewKind(m) !== 'reaction' });
+  const cached = await searchMedia({ query, chatID: chat?.id, from, media, sinceMs, max, kind });
   const combined = new Map([...cached.items, ...found.items].map(m => [`${m.chatID}:${m.id}`, m]));
   found.more ||= combined.size > max;
   found.items = [...combined.values()].sort((a, b) => String(b.timestamp).localeCompare(String(a.timestamp))).slice(0, max);
@@ -522,7 +522,7 @@ async function cmdSearch({ pos, flags }) {
     console.log(JSON.stringify({ query, more: found.more, chats: [...byChat.values()] }, null, 1));
     return;
   }
-  const filters = [chat && `in ${label(chat, contacts)}`, from && `from ${from}`, media.length && `with ${media.join(' or ')}`, days && `last ${plural(days, 'day')}`].filter(Boolean);
+  const filters = [chat && `in ${label(chat, contacts)}`, from && `from ${from}`, kind && (kind === 'single' ? 'in one-to-one Chats' : 'in groups'), media.length && `with ${media.join(' or ')}`, days && `last ${plural(days, 'day')}`].filter(Boolean);
   console.log(renderSearch({ query, ...found }, { contacts, filters, max }));
 }
 
@@ -1249,7 +1249,7 @@ Read
                                       --search reaches anyone, with no rank. Needs Beeper Companion running
   trends                              who faded, rose, or is new in the Owner's messages, then their history in totals.
                                       Needs Beeper Companion running
-  search <words> [--chat <chat>] [--from me|them] [--media image] [--days N] [--max 20]
+  search <words> [--chat <chat>] [--from me|them] [--kind single|group] [--media image] [--days N] [--max 20]
                                       messages that contain these words, across all chats
   search --opens-group [<words>] [--members N] [--days N] [--max 20]
                                       the Owner's first message in each group they opened, newest first

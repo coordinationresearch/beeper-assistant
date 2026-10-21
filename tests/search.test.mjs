@@ -100,6 +100,17 @@ test('"from them" leaves out the Owner\'s messages even when Beeper returns them
   assert.deepEqual(me.items.map((m) => m.isSender), [true, true]);
 });
 
+test('--kind keeps hits in chats of that type, and leaves out a chat the page does not list', async () => {
+  const hits = [msg('!one', { me: true, text: 'coffee at the corner place?' }), msg('!crew', { me: true, text: 'coffee at the corner place?', hoursAgo: 2 }), msg('!unlisted', { me: true, hoursAgo: 3 })];
+  const chats = { '!one': { id: '!one', type: 'single' }, '!crew': { id: '!crew', type: 'group' } };
+  const single = await searchMessages({ query: 'coffee', sender: 'me', kind: 'single' }, { api: fakeAPI([page(hits, { chats })]).api });
+  assert.deepEqual(single.items.map((m) => m.chatID), ['!one']);
+  const group = await searchMessages({ query: 'coffee', kind: 'group' }, { api: fakeAPI([page(hits, { chats })]).api });
+  assert.deepEqual(group.items.map((m) => m.chatID), ['!crew']);
+  const any = await searchMessages({ query: 'coffee' }, { api: fakeAPI([page(hits, { chats })]).api });
+  assert.equal(any.items.length, 3);
+});
+
 test('running out of pages while Beeper has more says so', async () => {
   const lots = (i) => page(Array.from({ length: 20 }, (_, k) => msg('!a', { me: true, hoursAgo: i * 20 + k + 1 })), { hasMore: true });
   const { api, calls } = fakeAPI(Array.from({ length: 10 }, (_, i) => lots(i)));

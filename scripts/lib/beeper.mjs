@@ -390,12 +390,15 @@ export function searchPath({ query = '', chatID = null, sender = null, media = [
 // - sender=others still returns the Owner's own messages, so the sender is checked here too.
 // Pages also stop when one brings nothing new, since paging has repeated before.
 // `keep` drops hits that are not real messages, such as tapbacks that quote the words searched for.
+// opts.kind, 'single' or 'group', keeps hits whose chat the page lists as that type; a chat it
+// doesn't list is left out, since its kind is unknown.
 export async function searchMessages(opts, { max = 20, sinceMs = 0, keep = () => true, api = apiOnce } = {}) {
   const items = [];
   let dropped = 0;
   const chats = {};
   const seen = new Set();
-  const wanted = (m) => (opts.sender === 'me' ? m.isSender === true : opts.sender === 'others' ? m.isSender !== true : true);
+  const wanted = (m) => (opts.sender === 'me' ? m.isSender === true : opts.sender === 'others' ? m.isSender !== true : true)
+    && (!opts.kind || chats[m.chatID]?.type === opts.kind);
   let cursor = null;
   let more = false;
   const pages = Math.ceil(max / SEARCH_PAGE) * 2 + 3;

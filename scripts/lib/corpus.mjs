@@ -75,13 +75,14 @@ export async function withMediaContext(chatID, messages, file = corpusPath()) {
   } catch { return live; } // Older Corpus, permission denied, or no media index yet.
 }
 
-/** @param {{query: string, chatID?: string, from?: string, media?: string[], sinceMs?: number, max?: number}} options */
-export async function searchMedia({ query: words, chatID, from, media = [], sinceMs = 0, max = 20 }, file = corpusPath()) {
+/** @param {{query: string, chatID?: string, from?: string, media?: string[], sinceMs?: number, max?: number, kind?: string | null}} options */
+export async function searchMedia({ query: words, chatID, from, media = [], sinceMs = 0, max = 20, kind = null }, file = corpusPath()) {
   if (!existsSync(file) || !words?.trim()) return { items: [], chats: {} };
   const terms = words.trim().split(/\s+/).map(w => `"${w.replace(/"/g, '""')}"`).join(' ');
   const where = ["message_media_fts MATCH " + str(terms), "m.source_state='present'", 'm.retracted=0', 'm.duplicate_of IS NULL', `m.sent_at >= ${Number(sinceMs) || 0}`];
   if (chatID) where.push(chatWhere(chatID));
   if (from) where.push(`m.from_owner=${from === 'me' ? 1 : 0}`);
+  if (kind === 'single' || kind === 'group') where.push(`c.kind=${str(kind)}`);
   if (media.length && !media.includes('any')) {
     const kinds = media.filter(m => m === 'image' || m === 'link');
     if (!kinds.length) return { items: [], chats: {} };

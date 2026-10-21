@@ -97,14 +97,29 @@ const mindSplit = (rest) => {
 const personBody = b => keys(b, ['personID']) && personID(b.personID);
 const incidentID = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
 const incidentSelection = value => {
-  if (!keys(value, ['window', 'runIds', 'categories']) || !keys(value.categories, ['prompts', 'outputs', 'feedback', 'tools'])
+  if (!keys(value, ['window', 'runIds', 'categories'], ['backgroundCallIds']) || !keys(value.categories, ['prompts', 'outputs', 'feedback', 'tools'])
     || !Object.values(value.categories).every(v => typeof v === 'boolean') || !Array.isArray(value.runIds) || value.runIds.length > 10
     || !value.runIds.every(id => typeof id === 'string' && id.length > 0 && id.length <= 128 && !/[\x00-\x1f]/.test(id)) || new Set(value.runIds).size !== value.runIds.length
     || (Object.values(value.categories).some(Boolean) && !value.runIds.length)) return false;
+  if (value.backgroundCallIds !== undefined && (!Array.isArray(value.backgroundCallIds) || value.backgroundCallIds.length > 40 || !value.backgroundCallIds.every(id => Number.isSafeInteger(id) && id > 0) || new Set(value.backgroundCallIds).size !== value.backgroundCallIds.length)) return false;
   if (value.window === null) return true;
   const instant = v => typeof v === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(v) && Number.isFinite(Date.parse(v));
   return keys(value.window, ['since', 'until']) && instant(value.window.since) && instant(value.window.until)
     && Date.parse(value.window.until) > Date.parse(value.window.since) && Date.parse(value.window.until) - Date.parse(value.window.since) <= 7 * 86400000;
+};
+const incidentInstant = value => typeof value === 'string' && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString() === value;
+const incidentQuery = value => {
+  if (!keys(value, ['window'], ['feature', 'outcome', 'search', 'cursor', 'limit']) || !keys(value.window, ['since', 'until'])
+    || !incidentInstant(value.window.since) || !incidentInstant(value.window.until)) return false;
+  const span = Date.parse(value.window.until) - Date.parse(value.window.since);
+  if (span <= 0 || span > 7 * 86400000) return false;
+  if (value.feature !== undefined && !['triage', 'brief', 'brief-ahead'].includes(value.feature)) return false;
+  if (value.outcome !== undefined && !['running', 'ok', 'invalid', 'failed', 'cancelled', 'timeout', 'interrupted', 'other'].includes(value.outcome)) return false;
+  if (value.search !== undefined && (typeof value.search !== 'string' || value.search.length > 128 || /[\x00-\x1f\x7f]/.test(value.search))) return false;
+  if (value.limit !== undefined && (!Number.isSafeInteger(value.limit) || value.limit < 1 || value.limit > 100)) return false;
+  return value.cursor === undefined || (keys(value.cursor, ['priority', 'startedAt', 'id', 'revision']) && [0, 1].includes(value.cursor.priority)
+    && incidentInstant(value.cursor.startedAt) && Number.isSafeInteger(value.cursor.id) && value.cursor.id > 0
+    && typeof value.cursor.revision === 'string' && /^[a-f0-9]{64}$/.test(value.cursor.revision));
 };
 export const ACTIONS = [
   { name: 'detail list', route: '/detail/list', usage: 'ba app detail list <chatID>', modes: both(ALL), callers: OWNER, late: false, read: true, parse: oneChat, check: chatBody, chats: body => [body.chatID] },
@@ -117,6 +132,8 @@ export const ACTIONS = [
   { name: 'draft restore', route: '/draft/restore', usage: 'ba app draft restore <chatID> <backupID>', modes: both(NOT_READONLY), callers: OWNER, late: false,
     parse: rest => { if (rest.length !== 2 || !exactChatID(rest[0]) || !/^[1-9]\d*$/.test(rest[1])) throw Error('usage'); return { chatID: rest[0], id: Number(rest[1]) }; },
     check: b => keys(b, ['chatID', 'id']) && exactChatID(b.chatID) && Number.isSafeInteger(b.id) && b.id > 0, chats: b => [b.chatID] },
+  { name: 'draft clear', route: '/draft/clear', usage: 'ba app draft clear <chatID>', modes: both(NOT_READONLY), callers: OWNER, late: false,
+    parse: oneChat, check: chatBody, chats: b => [b.chatID] },
   { name: 'menu choose', route: '/menu/choose', usage: 'ba app menu choose <rowID> <version> <text>', modes: both(NOT_READONLY), callers: ['terminal'], late: false,
     parse: rest => { if (rest.length !== 3) throw Error('usage'); return { rowID: rest[0], version: rest[1], text: rest[2] }; },
     check: b => keys(b, ['rowID', 'version', 'text']) && typeof b.rowID === 'string' && /^[a-f0-9]{16}$/.test(b.rowID)
@@ -367,6 +384,16 @@ export const ACTIONS = [
   // Dismiss on the Menu bar panel's once-only line after Setup about where the sidebar shows.
   { name: 'sidebar tip dismiss', route: '/sidebar-tip/dismiss', usage: 'ba app sidebar tip dismiss', modes: both(FULL), callers: OWNER, late: false, parse: none, check: empty, chats: () => [] },
   { name: 'keep drafting', route: '/keep-drafting', usage: 'ba app keep drafting', modes: both(FULL), callers: OWNER, late: false, parse: none, check: empty, chats: () => [] },
+  // Settings → Background's Agent Drafts switch, also a row on Setup's last screen (ADR 0284). Off
+  // only stops, so a late run and a drafts-only run may; on starts spending again.
+  { name: 'agent drafts off', route: '/agent-drafts/off', usage: 'ba app agent drafts off', modes: both(NOT_READONLY), callers: OWNER, late: true, parse: none, check: empty, chats: () => [] },
+  { name: 'agent drafts on', route: '/agent-drafts/on', usage: 'ba app agent drafts on', modes: both(FULL), callers: OWNER, late: false, parse: none, check: empty, chats: () => [] },
+  // Settings → This Mac's Open at Login switch, also on Setup's last screen. Only the copy in Applications has it.
+  { name: 'open at login on', route: '/open-at-login/on', usage: 'ba app open at login on', modes: both(FULL), callers: OWNER, late: false, parse: none, check: empty, chats: () => [] },
+  { name: 'open at login off', route: '/open-at-login/off', usage: 'ba app open at login off', modes: both(FULL), callers: OWNER, late: false, parse: none, check: empty, chats: () => [] },
+  // Remove on Settings → Troubleshooting's skill row and Setup's last screen. It closes the app to the
+  // Terminal (ADR 0110), so it is the last command a terminal runs until the Owner clicks Install.
+  { name: 'skill remove', route: '/skill/remove', usage: 'ba app skill remove', modes: both(FULL), callers: OWNER, late: false, parse: none, check: empty, chats: () => [] },
   // The × on the first message of the sidebar's placed Reply (ADR 0130): the Reply becomes the Steps
   // it keeps, and Beeper's box the next message. It writes a Draft only, so a drafts-only run may.
   { name: 'reply choose', route: '/reply/choose', usage: 'ba app reply choose <chatID> <source> <replyID> <index>', modes: both(NOT_READONLY), callers: OWNER, late: false,
@@ -434,6 +461,8 @@ export const ACTIONS = [
     },
     check: (b) => keys(b, ['chatID', 'id', 'confirmed'], ['edits']) && exactChatID(b.chatID) && restOfferID(b.id) && b.confirmed === true && (b.edits === undefined || restChanges(b.edits)), chats: (b) => [b.chatID] },
   { name: 'reply stop', route: '/reply/stop', usage: 'ba app reply stop <chatID>', modes: both(NOT_READONLY), callers: OWNER, late: true, parse: oneChat, check: chatBody, chats: (b) => [b.chatID] },
+  // A Chat's Wrapped (ADR 0290): what its slides say, as the share icon's preview reads it. It only reads.
+  { name: 'wrapped', route: '/wrapped', usage: 'ba app wrapped <chatID>', modes: both(ALL), callers: OWNER, late: true, read: true, parse: oneChat, check: chatBody, chats: (b) => [b.chatID] },
   // Brief now (the sidebar): a Chat's Brief written now, or the saved one when it already read the
   // newest message. It writes nothing to Beeper, so a late run may; a read-only run spends nothing.
   // timeoutMs: a Brief is one agent call, which may run minutes.
@@ -509,6 +538,9 @@ export const ACTIONS = [
     parse: none, check: empty, chats: () => [] },
   { name: 'incident list', route: '/incident/list', usage: 'ba app incident list', modes: both(ALL), callers: OWNER, late: true, read: true,
     parse: none, check: empty, chats: () => [] },
+  { name: 'incident calls', route: '/incident/calls', usage: "ba app incident calls '<JSON query>'", modes: both(ALL), callers: OWNER, late: true, read: true,
+    parse: rest => { if (rest.length !== 1) throw Error('usage'); const query = JSON.parse(rest[0]); if (!incidentQuery(query)) throw Error('usage'); return { query }; },
+    check: body => keys(body, ['query']) && incidentQuery(body.query), chats: () => [] },
   { name: 'incident preview', route: '/incident/preview', usage: "ba app incident preview '<JSON selection>'", modes: both(FULL), callers: OWNER, late: false,
     parse: rest => { if (rest.length !== 1) throw Error('usage'); const selection = JSON.parse(rest[0]); if (!incidentSelection(selection)) throw Error('usage'); return { selection }; },
     check: body => keys(body, ['selection']) && incidentSelection(body.selection), chats: () => [] },

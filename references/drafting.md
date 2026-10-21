@@ -7,7 +7,7 @@ Reply suggestions are what the Owner could send next in a Chat, each written as 
 - Some sections come in sets, one for each case, such as who wrote last, how a group addressed the Owner, or what kind of Chat it is. The app picks one per call, so each says everything it needs on its own.
 - "Calendar events" says the same as the section of that name in ask.md. Its tests check the two stay the same.
 - An edit here changes every Reply suggestion and Agent Draft. Make it as its own change, with evidence that the replies come out better.
-- The last five sections go only into the sidebar's fast first call and the run on the owner's whole Harness that checks its suggestions (ADR 0133, 0134). Agent Drafts never read them.
+- The last six sections go only into the sidebar's fast first call and the run on the owner's whole Harness that checks its suggestions (ADR 0133, 0134). An Agent Draft's first call never reads them; a draft that would leave a blank gets the same checking run (ADR 0282).
 
 ## Reply suggestions
 
@@ -160,6 +160,10 @@ A fast first call wrote the suggestions on show from the messages alone, and sai
 ## Answers for a blank
 
 When a suggestion you return still has a blank, give in answers up to three ways to fill it that you found in what you read, such as the owner's calendar, their Notes, or their own messages. An answer's text is only the words that go in the blank, a few words of plain text with no blank of their own, and it fills the suggestion's first blank. Its source says where you found it in a few words, such as "Calendar: Dinner with Robin 7:30", "Notes: gate code", or "Your message on 10-02". Never invent an answer: each one needs a source you actually read. When you found none, or the suggestion has no blank, answers is null.
+
+## The owner's Usual
+
+Before you leave a blank, or give answers for one, look for the owner's Usual: what the owner's own messages show they pick again and again for the same kind of plan, such as a place, a time, an activity, or a way of handling logistics, like their usual spot for weekend coffee. You judge what counts as the same kind of plan, and whether a Usual fits this person and this moment, such as the city the owner is in now. In a one-to-one Chat, look in the owner's own messages in any of their one-to-one Chats: `ba search --from me --kind single "<words such a plan holds>"`, or Corpus messages with from_owner 1 in chats of kind 'single'. In a group or a Chat of unknown kind, look only in this Chat's messages. A Usual comes only from what the owner wrote, never from what someone else said or from a message Auto sent. One clearly leads when the owner picked it most of the times this kind of plan came up, lately included; two or more that each come up often compete. A plan the owner has never made before has no Usual. When one clearly leads, write it in where the blank would go, and give usual: its words as text, where it came from in a few words as source, such as "Your coffee plans since March", and as messages up to three of the owner's messages that show it, by their Corpus message_key or the message ID `ba search --json` gives. When several compete, leave the blank and give them as answers, each with its source. When none fits, leave the blank. Never quote the owner's message or name whom they wrote it to in a reply. When the suggestion took no Usual, usual is null.
 
 ## A Playbook situation
 
