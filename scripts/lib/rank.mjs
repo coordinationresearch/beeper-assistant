@@ -202,6 +202,11 @@ export const SLIP_FLOOR_MS = 2 * DAY;
 export const MUST_WAIT_MS = 7 * DAY;
 export const SOON_WINDOW_MS = 72 * HOUR;
 export const PACE_MIN_REPLIES = 5;
+// An older debt (ADR 0279): their newest message is two weeks old or more, the Chats the list held only
+// once it looked back 60 days. Still owed, but another day no longer changes what it costs, so its wait
+// or a deadline already passed never makes it Must, and it comes after every newer Chat in its Band.
+export const OLD_DEBT_MS = 14 * DAY;
+export const isOldDebt = (r) => Number(r.ageMs) >= OLD_DEBT_MS;
 
 // End of the Mac's local calendar day holding `now`, as ms. Local Date setters, not UTC.
 export function endOfLocalDay(now) {
@@ -223,30 +228,38 @@ export function slipLineMs(r, pace) {
 // deadline: ISO string or null. dayEnd: endOfLocalDay(now) unless injected.
 export function bandOf(r, { now, pace = null, deadline = null, dayEnd = endOfLocalDay(now) }) {
   const cls = r.rank.class;
-  if (cls !== 'urgent' && cls !== 'waiting') return { band: null, slipping: false, waitedMs: 0, lineMs: slipLineMs(r, pace) };
+  if (cls !== 'urgent' && cls !== 'waiting') return { band: null, slipping: false, waitedMs: 0, lineMs: slipLineMs(r, pace), old: isOldDebt(r) };
   // A Chat the Owner wrote last is here by a mark or a Dropped item; it has no wait and never slips.
   const waitedMs = r.lastFrom === 'me' ? 0 : Math.max(0, now - waitStart(r, now));
   const due = deadline ? Date.parse(deadline) : NaN;
   const lineMs = slipLineMs(r, pace);
   const slipping = waitedMs >= lineMs;
+  const old = isOldDebt(r);
   let band = 'rest';
   if (cls === 'urgent' && r.rank.judged) band = 'must';
-  else if (Number.isFinite(due) && due < dayEnd) band = 'must';
-  else if (waitedMs >= MUST_WAIT_MS) band = 'must';
+  else if (Number.isFinite(due) && due < dayEnd && !(old && due <= now)) band = 'must';
+  else if (waitedMs >= MUST_WAIT_MS && !old) band = 'must';
   else if (slipping) band = 'should';
   else if (Number.isFinite(due) && due < now + SOON_WINDOW_MS) band = 'should';
   else if (markedByOwner(r)) band = 'should';
   else if (cls === 'urgent') band = 'should';
-  return { band, slipping, waitedMs, lineMs };
+  return { band, slipping, waitedMs, lineMs, old };
 }
 
 // Today's order inside a Band. Must: Urgent with no deadline first, then by deadline
 // ascending, then undated musts (the seven-day waiters) longest wait first. Should: by
-// waitedMs/lineMs descending. The rest by waitedMs descending. Ties: newest first.
+// waitedMs/lineMs descending. The rest by waitedMs descending. Ties: newest first. In Should
+// and the rest, an older debt comes after every newer Chat, the most recent first (ADR 0279).
 export function compareToday(a, b) {
   const bandAt = (r) => { const i = BANDS.indexOf(r.rank.band); return i < 0 ? BANDS.length : i; };
   const d = bandAt(a) - bandAt(b);
   if (d) return d;
+  if (a.rank.band !== 'must') {
+    // The mark the Band was set by, so a wrapped row whose age reads differently sorts as it banded.
+    const oldA = a.rank.old ?? isOldDebt(a), oldB = b.rank.old ?? isOldDebt(b);
+    if (oldA !== oldB) return oldA ? 1 : -1;
+    if (oldA) return a.ageMs - b.ageMs;
+  }
   if (a.rank.band === 'must') {
     const dueA = Date.parse(a.rank.deadline ?? ''), dueB = Date.parse(b.rank.deadline ?? '');
     const openA = a.rank.class === 'urgent' && !Number.isFinite(dueA), openB = b.rank.class === 'urgent' && !Number.isFinite(dueB);

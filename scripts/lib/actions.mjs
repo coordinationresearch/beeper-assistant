@@ -62,6 +62,10 @@ const menuText = (value, multiple) => {
 const personID = value => typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value);
 // An offer of a Reply's rest: Enter's (enter-continue.ts) or one their message left (reply-runner.ts).
 const restOfferID = value => typeof value === 'string' && /^(?:resume:)?[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(value);
+// The Owner's changes to that rest before the press, by each Step's place from 0 (rest-edits.ts checks them against the offer).
+const restPlace = (n) => Number.isSafeInteger(n) && n >= 0 && n < 64;
+const restChanges = (e) => keys(e, ['drop', 'texts']) && Array.isArray(e.drop) && e.drop.length <= 64 && e.drop.every(restPlace) && Array.isArray(e.texts) && e.texts.length <= 64
+  && e.texts.every((t) => keys(t, ['at', 'text']) && restPlace(t.at) && typeof t.text === 'string' && t.text.length <= 20_000);
 const LINE_ID = /^f[1-9]\d{0,15}$/, LOOP_ID = /^l_[0-9a-f]{12}$/, UNDO_ID = /^u[0-9a-f]{16}$/;
 const PARTS = ['who', 'now', 'you', 'talk', 'history', 'others'];
 const shownText = value => typeof value === 'string' && value.length <= 4000 && !value.includes('\0');
@@ -399,9 +403,19 @@ export const ACTIONS = [
   // stopped it (ADR 0277), or after Enter sent only its first message (ADR 0130). `reply rest`
   // shows the offer and its ID; `reply rest send` presses it, for exactly that offer.
   { name: 'reply rest', route: '/reply/rest', usage: 'ba app reply rest <chatID>', modes: both(ALL), callers: OWNER, late: true, read: true, parse: oneChat, check: chatBody, chats: (b) => [b.chatID] },
-  { name: 'reply rest send', route: '/reply/rest/send', usage: 'ba app reply rest send <chatID> <offerID> --confirmed', modes: both(FULL), callers: OWNER, late: false,
-    parse: (rest) => { if (rest.length !== 3 || !exactChatID(rest[0]) || !restOfferID(rest[1]) || rest[2] !== '--confirmed') throw new Error('usage'); return { chatID: rest[0], id: rest[1], confirmed: true }; },
-    check: (b) => keys(b, ['chatID', 'id', 'confirmed']) && exactChatID(b.chatID) && restOfferID(b.id) && b.confirmed === true, chats: (b) => [b.chatID] },
+  // --drop <n> leaves out the nth Step `reply rest` listed, from 1, and --text <n> <words> rewords
+  // the nth when it is a message, as the sidebar's × and a click on its words do (rest-edits.ts).
+  { name: 'reply rest send', route: '/reply/rest/send', usage: 'ba app reply rest send <chatID> <offerID> [--drop <n>]... [--text <n> <words>]... --confirmed', modes: both(FULL), callers: OWNER, late: false,
+    parse: (rest) => {
+      if (rest.length < 3 || !exactChatID(rest[0]) || !restOfferID(rest[1]) || rest.at(-1) !== '--confirmed') throw new Error('usage');
+      const drop = [], texts = [];
+      for (let i = 2; i < rest.length - 1;) {
+        const at = /^[1-9]\d?$/.test(rest[i + 1] ?? '') ? Number(rest[i + 1]) - 1 : -1;
+        if (rest[i] === '--drop' && at >= 0) { drop.push(at); i += 2; } else if (rest[i] === '--text' && at >= 0 && i + 2 < rest.length - 1) { texts.push({ at, text: rest[i + 2] }); i += 3; } else throw new Error('usage');
+      }
+      return { chatID: rest[0], id: rest[1], confirmed: true, ...(drop.length || texts.length ? { edits: { drop, texts } } : {}) };
+    },
+    check: (b) => keys(b, ['chatID', 'id', 'confirmed'], ['edits']) && exactChatID(b.chatID) && restOfferID(b.id) && b.confirmed === true && (b.edits === undefined || restChanges(b.edits)), chats: (b) => [b.chatID] },
   { name: 'reply stop', route: '/reply/stop', usage: 'ba app reply stop <chatID>', modes: both(NOT_READONLY), callers: OWNER, late: true, parse: oneChat, check: chatBody, chats: (b) => [b.chatID] },
   // Brief now (the sidebar): a Chat's Brief written now, or the saved one when it already read the
   // newest message. It writes nothing to Beeper, so a late run may; a read-only run spends nothing.

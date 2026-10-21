@@ -47,14 +47,17 @@ test('a pinned chat is kept and flagged, never suppressed', () => {
 });
 
 test('chats older than the window are left out, and unread ones are counted', () => {
-  const t = build([chat({ unread: 1, hoursAgo: 24 * 15 }), chat({ lastFrom: 'them', hoursAgo: 24 * 15 })]);
+  // 60 days back (ADR 0279): a Chat quiet for 15 days stays, one quiet for 61 doesn't.
+  assert.equal(build([chat({ lastFrom: 'them', hoursAgo: 24 * 15 })]).people.length, 1);
+  const t = build([chat({ unread: 1, hoursAgo: 24 * 61 }), chat({ lastFrom: 'them', hoursAgo: 24 * 61 })]);
   assert.equal(t.people.length, 0);
   assert.equal(t.stats.olderUnread, 1);
 });
 
 test('the window is adjustable', () => {
-  const t = build([chat({ title: 'Flo', unread: 1, hoursAgo: 24 * 15 })], { windowDays: 30 });
+  const t = build([chat({ title: 'Flo', unread: 1, hoursAgo: 24 * 65 })], { windowDays: 90 });
   assert.deepEqual(names(t.people), ['Flo']);
+  assert.deepEqual(names(build([chat({ title: 'Flo', unread: 1, hoursAgo: 24 * 15 })], { windowDays: 14 }).people), []);
 });
 
 test('groups appear only when unread, in their own section', () => {
@@ -661,12 +664,22 @@ test('without dropped(), collectTriage reads and returns exactly what it did bef
   assert.equal(t.people[0].rank.held, undefined);
 });
 
+test('inside the 60 days, a held Chat whose own message is owed ranks as owed, its Dropped item held, not leading (ADR 0279)', async () => {
+  const pal = chat({ id: '!pal', title: 'Old Pal', lastFrom: 'them', text: 'are you around next month?', hoursAgo: 30 * 24 });
+  const held = new Map([['!pal', { kind: 'unanswered', why: 'They asked about next month and never heard back', at: new Date(NOW - 30 * 86_400_000).toISOString() }]]);
+  const reads = { chatsSince: async () => ({ chats: [structuredClone(pal)], truncated: false }), contacts: async () => contacts, state: () => null,
+    messages: async () => [said('m-pal', 'them', 'are you around next month?', 30 * 24)], dropped: () => held,
+    history: async () => ({ stats: new Map([['!pal', { owner: 40, theirs: 40, owner90: 25, ownerWeeks26: 8, messages: 80, runs: 20, answered: 15 }]]), problems: [] }) };
+  const t = await collectTriage(reads, { now: NOW, judge: async () => new Map([['!pal', { owed: 'yes', want: 'plan', urgent: false }]]) });
+  assert.deepEqual([t.people[0].rank.class, t.people[0].rank.held, t.people[0].rank.band, t.people[0].rank.old], ['waiting', { leads: false }, 'should', true]);
+});
+
 test('a held row only its Dropped item let past the window is led by it, even with a question of theirs', async () => {
-  const old = chat({ id: '!old', title: 'Old Pal', lastFrom: 'them', text: 'are you around next month?', hoursAgo: 30 * 24 });
-  const held = new Map([['!old', { kind: 'unanswered', why: 'They asked about next month and never heard back', at: new Date(NOW - 30 * 86_400_000).toISOString() }]]);
+  const old = chat({ id: '!old', title: 'Old Pal', lastFrom: 'them', text: 'are you around next month?', hoursAgo: 70 * 24 });
+  const held = new Map([['!old', { kind: 'unanswered', why: 'They asked about next month and never heard back', at: new Date(NOW - 70 * 86_400_000).toISOString() }]]);
   const reads = { chatsSince: async () => ({ chats: [], truncated: false }), contacts: async () => contacts, state: () => null,
     chat: async () => { const { preview, ...bare } = structuredClone(old); return bare; },
-    messages: async () => [said('m-old', 'them', 'are you around next month?', 30 * 24)], dropped: () => held,
+    messages: async () => [said('m-old', 'them', 'are you around next month?', 70 * 24)], dropped: () => held,
     history: async () => ({ stats: new Map([['!old', { owner: 40, theirs: 40, owner90: 25, ownerWeeks26: 8, messages: 80, runs: 20, answered: 15 }]]), problems: [] }) };
   const t = await collectTriage(reads, { now: NOW, judge: async () => new Map([['!old', { owed: 'yes', want: 'plan', urgent: false }]]) });
   assert.equal(t.people[0].rank.class, 'waiting');

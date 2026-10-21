@@ -354,6 +354,35 @@ test('the Band a row takes in Today (ADR 0263)', () => {
   assert.equal(band(wait({ cls: 'unsure' })).band, null);
 });
 
+test('an older debt, quiet two weeks, is still owed but never Must for its wait, and comes last in its Band (ADR 0279)', () => {
+  const noon = new Date(0); noon.setFullYear(2026, 8, 30); noon.setHours(12, 0, 0, 0);
+  const now = noon.getTime(), DAY = 24 * HOUR;
+  const tonight = new Date(now); tonight.setHours(23, 0, 0, 0);
+  const old = (o = {}) => ({ type: 'single', closeness: 'known', lastFrom: 'them', ageMs: 40 * DAY, markedUnread: false, unreadCount: 0,
+    waitingSince: new Date(now - 40 * DAY).toISOString(), rank: { class: o.cls ?? 'waiting', judged: o.judged }, ...o });
+  const band = (r, o = {}) => bandOf(r, { now, ...o }).band;
+  assert.equal(band(old()), 'should', 'waiting 40 days, past the line, but no longer Must');
+  assert.equal(band(old({ ageMs: 13 * DAY })), 'must', 'their newest message under two weeks old: the seven-day rule holds');
+  assert.equal(band(old(), { deadline: new Date(now - 20 * DAY).toISOString() }), 'should', 'a deadline long passed makes no Must');
+  assert.equal(band(old(), { deadline: tonight.toISOString() }), 'must', 'a deadline still ahead today does');
+  assert.equal(band(old({ cls: 'urgent', judged: true })), 'must', 'a Judgment\'s Urgent does');
+  assert.equal(band(old(), { pace: { p90Ms: 50 * DAY, replied: 10 } }), 'rest', 'on the Owner\'s own slow pace it rests');
+  assert.equal(band(old({ ageMs: 14 * DAY })), 'should', 'two weeks to the millisecond is old');
+  const earlier = new Date(now); earlier.setHours(9, 0, 0, 0);
+  assert.equal(band(old(), { deadline: earlier.toISOString() }), 'should', 'nor a deadline that passed this morning');
+  assert.equal(band(old({ ageMs: 13 * DAY }), { deadline: earlier.toISOString() }), 'must', 'which still makes a newer Chat Must');
+  assert.deepEqual([bandOf(old(), { now }).old, bandOf(old({ ageMs: DAY }), { now }).old, bandOf(old({ cls: 'nothing' }), { now }).old], [true, false, true]);
+  // The Band's own mark decides the sort, so a wrapped row whose age reads differently sorts as it banded.
+  const marked = [{ ageMs: 30 * DAY, rank: { band: 'should', class: 'waiting', deadline: null, waitedMs: 0, lineMs: 2 * DAY, old: false } },
+    { ageMs: HOUR, rank: { band: 'should', class: 'waiting', deadline: null, waitedMs: 3 * DAY, lineMs: 2 * DAY, old: true } }];
+  assert.deepEqual([...marked].sort(compareToday).map((r) => r.rank.old), [false, true]);
+  const at = (band, ageMs, waitedMs, lineMs = 2 * DAY) => ({ ageMs, rank: { band, class: 'waiting', deadline: null, waitedMs, lineMs } });
+  const should = [at('should', 50 * DAY, 50 * DAY), at('should', 3 * DAY, 3 * DAY), at('should', 20 * DAY, 20 * DAY), at('should', HOUR, 2.5 * DAY)];
+  assert.deepEqual([...should].sort(compareToday).map((r) => r.ageMs / DAY), [3, HOUR / DAY, 20, 50], 'newer Chats by how far past the line, then older debts newest first');
+  const rest = [at('rest', 30 * DAY, 30 * DAY, 60 * DAY), at('rest', HOUR, 20 * HOUR)];
+  assert.deepEqual([...rest].sort(compareToday).map((r) => r.ageMs), [HOUR, 30 * DAY], 'the rest too');
+});
+
 test('compareToday orders each Band and the Bands against each other', () => {
   // Must rows with no deadline that are not urgent (the seven-day waiters) sort after the
   // dated ones, longest wait first.

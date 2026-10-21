@@ -9,6 +9,9 @@ import { fileURLToPath } from 'node:url';
 import { gapsIn } from '../scripts/lib/gaps.mjs';
 import { escapeMarkdown } from '../scripts/lib/markdown-escape.mjs';
 import { FIRST_MESSAGE_IN_CREATE, memberKey } from '../scripts/lib/groups.mjs';
+import { NEWEST_PAGE, chatPage, newestShown, renderChat } from '../scripts/lib/render.mjs';
+import { oldestFirst } from '../scripts/lib/beeper.mjs';
+import { messageAlias } from '../scripts/lib/state.mjs';
 
 process.env.TZ = 'UTC'; // The VM-enabled direct test invocation uses the same captured timezone.
 const source = readFileSync(new URL('../scripts/ba.mjs', import.meta.url), 'utf8');
@@ -28,7 +31,9 @@ const booleans = ['json', 'confirmed', 'replace', 'for-everyone', 'dismiss-on-me
 // What Beeper keeps of an escaped text: its backslash escapes and the references for spaces consumed.
 const beeperReads = (text) => String(text).replace(/\\([!-/:-@[-`{-~])/g, '$1').replaceAll('&#32;', ' ').replaceAll('&#9;', '\t');
 
-async function replay(argv, { alias = false, text = source, existing = '', line = [], env = {}, app = null, network = 'WhatsApp', failCreate = false, older = [], more = [] } = {}) {
+// page(limit, messages): Beeper's messages as the CLI's list gives them for that --limit, in place of
+// every message at any limit.
+async function replay(argv, { alias = false, text = source, existing = '', line = [], env = {}, app = null, network = 'WhatsApp', failCreate = false, older = [], more = [], page = null } = {}) {
   const mutations = [], stdout = [], stderr = [];
   const state = { aliases: {}, drafted: {}, dismissed: {} };
   const chat = (id) => ({ id, title: 'Test Chat', network, accountID: 'test', type: id === '!group' ? 'group' : 'single', draft: draft, participants: [{ id, phoneNumber: '+15550102030' }] });
@@ -44,7 +49,7 @@ async function replay(argv, { alias = false, text = source, existing = '', line 
     isChatAlias: (id) => id === 'c00000000', isMessageAlias: () => false, chatAlias: () => 'c00000000', messageAlias: (id) => `ref-${id}`,
     rememberChats: (s, chats) => { s.aliases.c00000000 = { id: chats[0].id }; },
     showChat: async (id) => chat(id), listChats: () => [...['!one', '!two', ...(created ? ['!group'] : [])].map(chat)],
-    listMessages: async () => [...messages], listMessagesFast: async () => [...messages], draftText: (c) => c.draft,
+    listMessages: async (_id, o) => page ? page(o?.limit ?? 20, messages) : [...messages], listMessagesFast: async () => [...messages], draftText: (c) => c.draft,
     isGroup: (c) => c.type === 'group', counterparties: (c) => c.id === '!group' ? [{ id: '!one' }, { id: '!two' }] : [{ id: c.id }],
     participantsOf: () => [{}, {}, {}], handlesOf: () => ['+15550102030'], looksLikeEmail: () => false,
     ownersOf: () => contact ? ['Test'] : [], addContact: () => { contact = true; return mutate('contact', 'contact-1')(); },
@@ -55,6 +60,8 @@ async function replay(argv, { alias = false, text = source, existing = '', line 
     FIRST_MESSAGE_IN_CREATE, memberKey,
     olderIMessageGroup: async (handles, read) => (await read()).some((g) => g.length === handles.length && handles.every((h) => g.includes(h))),
     holdsExactly: (c, members) => mocks.isGroup(c) && mocks.counterparties(c).length === members.length && members.every((m) => mocks.counterparties(c).some((p) => p.id === m.id)),
+    // What the chat command prints as newest, the page it reads, and the one send checks (lib/render.mjs).
+    NEWEST_PAGE, chatPage, newestShown, renderChat, withMediaContext: async (_id, list) => list,
     gapsIn, escapeMarkdown, clip: (s) => s, plural: (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`, quote: (s) => `«${s}»`, htmlToText: (s) => s,
     openCorpus: () => ({ ok: true, file: '/synthetic' }), decideSame: mutate('identity', { ok: true }),
     addNote: mutate('note', { status: 'saved', note: { id: 'n00000000', author: 'agent', source: { messages: [] } } }),
@@ -121,6 +128,54 @@ if (!vm.SourceTextModule) {
       const r = await replay(args); assert.equal(r.status, 2, r.stderr); assert.deepEqual(r.mutations, []);
     }
     const r = await replay(['draft', '!one', '--text=--dry-run']); assert.equal(r.status, 0, r.stderr); assert.ok(r.mutations.length);
+  });
+  // Beeper gives iMessage's parts of one send the same sortKey, and its list order alone breaks the tie
+  // (2026-10-20): a page of one ended on one part and a page of three on the other, so a `ba send
+  // --after` taken from `ba chat --limit 1` was refused as changed.
+  test('ba chat prints the same newest message at any --limit, the one ba send checks', async () => {
+    const tied = '1792442561585';
+    const beeper = [ // newest first, as Beeper lists them
+      { id: 'part-2', text: 'Synthetic caption', sortKey: tied, timestamp: '2026-10-19T20:42:41.585Z', isSender: false },
+      { id: 'part-1', text: 'Synthetic photo', sortKey: tied, timestamp: '2026-10-19T20:42:41.585Z', isSender: false },
+      { id: 'hidden-1', text: 'Synthetic event', sortKey: '1792442560286', timestamp: '2026-10-19T20:42:40.286Z', isSender: false, isHidden: true },
+      { id: 'msg-0', text: 'Synthetic question', sortKey: '1792442500000', timestamp: '2026-10-19T20:41:40.000Z', isSender: false },
+    ];
+    const page = (limit, sent) => oldestFirst([...sent.filter((m) => m.id === 'sent-1'), ...beeper].slice(0, limit));
+    // The page of one ends on a different part than any longer page: the tie the fix answers.
+    assert.notEqual(newestShown(page(1, [])).id, newestShown(page(3, [])).id);
+    const named = [];
+    for (const limit of ['1', '2', '3', '20', '40']) {
+      const r = await replay(['chat', '!one', '--limit', limit], { page });
+      assert.equal(r.status, 0, r.stderr);
+      const alias = r.stdout.match(/newest message: (\S+)/)?.[1];
+      named.push(beeper.find((m) => messageAlias(m.id) === alias)?.id);
+    }
+    assert.deepEqual(named, Array(5).fill(newestShown(page(NEWEST_PAGE, [])).id));
+    // The reference as the chat command gives it; this harness's own references are ref-<id>.
+    const json = await replay(['chat', '!one', '--limit', '1', '--json'], { page });
+    assert.equal(JSON.parse(json.stdout).newest, `ref-${named[0]}`);
+    const sent = await replay(['send', '!one', '--text', 'Synthetic reply', '--after', JSON.parse(json.stdout).newest, '--confirmed'], { page });
+    assert.doesNotMatch(sent.stderr, /has changed since it was read/);
+    assert.ok(sent.mutations.some(([kind]) => kind === 'api'), sent.stderr);
+    // A page of one still shows only the newest message, with the newest the send checks.
+    const one = await replay(['chat', '!one', '--limit', '1'], { page });
+    assert.equal(one.stdout.match(/«Synthetic \w+»/g)?.length, 1);
+  });
+  // A short read must show the message it names as newest, even with hidden items after it, or an
+  // agent could send after a message it never saw.
+  test('hidden items after the newest message never leave it out of a short ba chat', async () => {
+    const beeper = [ // newest first
+      { id: 'event-2', text: 'Synthetic event', sortKey: '1792442569000', timestamp: '2026-10-19T20:42:49.000Z', isSender: false, isHidden: true },
+      { id: 'event-1', text: 'Synthetic event', sortKey: '1792442568000', timestamp: '2026-10-19T20:42:48.000Z', isSender: false, isHidden: true },
+      { id: 'cancel-1', text: 'Synthetic cancel', sortKey: '1792442565000', timestamp: '2026-10-19T20:42:45.000Z', isSender: false },
+      { id: 'msg-0', text: 'Synthetic question', sortKey: '1792442500000', timestamp: '2026-10-19T20:41:40.000Z', isSender: false },
+    ];
+    const page = (limit) => oldestFirst(beeper.slice(0, limit));
+    const r = await replay(['chat', '!one', '--limit', '1'], { page });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout.match(/newest message: (\S+)/)?.[1], messageAlias('cancel-1'));
+    assert.match(r.stdout, /«Synthetic cancel»/);
+    assert.doesNotMatch(r.stdout, /«Synthetic question»/);
   });
   // Beeper reads message and draft text as Markdown, so ba's own writes go escaped and arrive as typed
   // (lib/markdown-escape.mjs, ADR 0276), and their checks find the text as written.

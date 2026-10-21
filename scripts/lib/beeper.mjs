@@ -241,10 +241,15 @@ export async function showChat(selector) {
   return runBeeper(['chats', 'show', '--chat', selector, '--max-participants', '50']);
 }
 
+// Beeper's list, newest first, as oldest first by sortKey. Items with the same sortKey, as iMessage's
+// parts of one send have, keep Beeper's order, so which one ends a page depends on the page:
+// lib/render.mjs NEWEST_PAGE.
+export const oldestFirst = (list) => list.slice().sort((a, b) => String(a.sortKey || a.timestamp).localeCompare(String(b.sortKey || b.timestamp), 'en', { numeric: true }));
+
 export async function listMessages(chatID, { limit = 20 } = {}) {
   const data = await runBeeper(['messages', 'list', '--chat', chatID, '--limit', String(limit)]);
   // Newest first from the CLI. Callers get oldest first.
-  return asList(data).slice().sort((a, b) => String(a.sortKey || a.timestamp).localeCompare(String(b.sortKey || b.timestamp), 'en', { numeric: true }));
+  return oldestFirst(asList(data));
 }
 
 export async function searchChats(query, { limit = 20 } = {}) {
@@ -358,8 +363,7 @@ export async function listMessagesFast(chatID, { limit = 8 } = {}) {
   const res = await apiOnce('GET', `/v1/chats/${encodeURIComponent(chatID)}/messages`, undefined, { timeoutMs: 10_000 });
   if (!res.ok && loginSource) throw apiError(`Messages unavailable: ${res.error}`, res);
   if (!res.ok) return listMessages(chatID, { limit });
-  const all = asList(res.data).slice().sort((a, b) => String(a.sortKey || a.timestamp).localeCompare(String(b.sortKey || b.timestamp), 'en', { numeric: true }));
-  return all.slice(-limit);
+  return oldestFirst(asList(res.data)).slice(-limit);
 }
 
 // ---- message search ----

@@ -39,7 +39,7 @@ Run `ba triage`. When Beeper Companion is running, it prints the Companion's Cat
 
 When Catch up isn't available, `ba triage` says so in one line and ranks on its own. Follow the steps below. `--days`, `--max`, and `--all` always give that ranking.
 
-1. Run `ba triage`. Its own ranking covers the last 14 days and lists up to 100 people. `--days N` and `--max N` change that.
+1. Run `ba triage`. Its own ranking covers the last 60 days and lists up to 100 people. `--days N` and `--max N` change that.
 
 2. Read the rows. They come ranked, highest first, under four headings: URGENT, WAITING ON YOU, UNSURE, and NOTHING OWED. Each row looks like this:
 

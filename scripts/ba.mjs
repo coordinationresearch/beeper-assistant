@@ -19,7 +19,7 @@ import { agentLabel, stepsFromAgent, writeSuggestion } from './lib/suggestions.m
 import { collectTriage } from './lib/triage-run.mjs';
 import { catchUpForTriage, catchUpJSON, catchUpReferences, renderCatchUp } from './lib/catch-up.mjs';
 import { SEARCH_MAX, peopleFromApp, renderPeople, renderTrends, trendsFromApp } from './lib/people-trends.mjs';
-import { UNTRUSTED_NOTE, ago, mediaKind, networkName, plural, quote, renderChat, renderMedia, renderSearch, renderTriage, renderWho } from './lib/render.mjs';
+import { NEWEST_PAGE, UNTRUSTED_NOTE, ago, chatPage, mediaKind, networkName, newestShown, plural, quote, renderChat, renderMedia, renderSearch, renderTriage, renderWho } from './lib/render.mjs';
 import { chatAlias, dismiss, isChatAlias, isLineChat, isMessageAlias, loadState, messageAlias, pruneDismissed, recordDraft, copyMedia, pruneMedia, rememberChats, rememberMessages, saveState, savedMessage, stateDir, undismiss } from './lib/state.mjs';
 import { DEFAULT_WINDOW_DAYS, chatName, clip, counterparties, draftText, handlesOf, htmlToText, isGroup, isMessagePreview, previewKind, wantsHistory } from './lib/triage.mjs';
 
@@ -264,8 +264,7 @@ async function cmdChat({ pos, flags }) {
   const chat = await resolveChat(pos[0], state);
   const limit = Number(flags.limit || 20);
   if (!(limit >= 1 && limit <= 200)) throw new UsageError('--limit must be between 1 and 200');
-  let around = null;
-  let messages;
+  let around = null, messages, newest;
   if (flags.around) {
     around = await resolveMessage(chat, flags.around);
     // Beeper confirms the message is in this chat. The history files only supply its neighbours.
@@ -279,15 +278,16 @@ async function cmdChat({ pos, flags }) {
     rememberMessages(state, messages);
     saveState(state);
   } else {
-    messages = await listMessages(chat.id, { limit });
+    const read = await listMessages(chat.id, { limit: Math.max(limit, NEWEST_PAGE) }); // what ba send checks
+    ({ newest, messages } = chatPage(read, limit));
   }
   const contacts = await loadContacts();
   messages = await withMediaContext(chat.id, messages);
   if (flags.json) {
-    console.log(JSON.stringify({ chat: { ref: chatAlias(chat.id), id: chat.id, name: chatName(chat, contacts).name, network: chat.network, type: chat.type, unreadCount: chat.unreadCount, draft: chat.draft, reminder: chat.reminder }, around: around ? messageAlias(around) : undefined, messages: messages.map((m) => ({ ref: messageAlias(m.id), id: m.id, from: m.isSender ? 'me' : 'them', sender: m.senderName, at: m.timestamp, text: htmlToText(m.text).replace(/\{\{\s*sender\s*\}\}/g, m.isSender ? 'I' : (m.senderName || 'They')), ...(m.mediaContext ? { mediaContext: m.mediaContext } : {}), hidden: m.isHidden === true, replyTo: m.linkedMessageID || null })) }, null, 1));
+    console.log(JSON.stringify({ chat: { ref: chatAlias(chat.id), id: chat.id, name: chatName(chat, contacts).name, network: chat.network, type: chat.type, unreadCount: chat.unreadCount, draft: chat.draft, reminder: chat.reminder }, around: around ? messageAlias(around) : undefined, ...(newest === undefined ? {} : { newest: newest ? messageAlias(newest.id) : null }), messages: messages.map((m) => ({ ref: messageAlias(m.id), id: m.id, from: m.isSender ? 'me' : 'them', sender: m.senderName, at: m.timestamp, text: htmlToText(m.text).replace(/\{\{\s*sender\s*\}\}/g, m.isSender ? 'I' : (m.senderName || 'They')), ...(m.mediaContext ? { mediaContext: m.mediaContext } : {}), hidden: m.isHidden === true, replyTo: m.linkedMessageID || null })) }, null, 1));
     return;
   }
-  console.log(renderChat(chat, messages, { contacts, around }));
+  console.log(renderChat(chat, messages, { contacts, around, ...(newest === undefined ? {} : { newest }) }));
 }
 
 function matchesTokens(text, tokens) {
@@ -888,8 +888,8 @@ async function cmdSend({ pos, flags }) {
   }
   needConfirmed(flags, timed ? `A Timed send to ${label(chat, contacts)}` : `Sending to ${label(chat, contacts)}`);
   if (chat.isReadOnly) throw new BeeperError(`This chat is read-only. Nothing was ${verb}.`);
-  const recent = await listMessages(chat.id, { limit: 12 });
-  const newest = recent.filter((m) => !m.isHidden).pop();
+  const recent = await listMessages(chat.id, { limit: NEWEST_PAGE });
+  const newest = newestShown(recent);
   // The chat must still look the way it did when the reply was written.
   const after = flags.after;
   if (!after) throw new UsageError('Give --after <message>, the "newest message" reference printed by the chat command. It proves the chat was read before writing. Use --after none for a chat with no messages.');
@@ -1183,11 +1183,11 @@ async function cmdGroup({ flags }) {
     }
     return;
   }
-  const msgs = await listMessages(chat.id, { limit: 5 }).catch(() => []);
+  const msgs = await listMessages(chat.id, { limit: NEWEST_PAGE }).catch(() => []);
   if (!existed && msgs.length) console.log(`It already holds ${msgs.length} message${msgs.length > 1 ? 's' : ''}. Read the chat before sending, since some networks insert a placeholder.`);
   if (text) {
     if (existed) { console.log('The first message was not sent, because the group already existed. Read it, then use send.'); return; }
-    const newest = msgs.filter((m) => !m.isHidden).pop();
+    const newest = newestShown(msgs);
     await cmdSend({ pos: [chat.id], flags: { text, confirmed: true, after: newest ? messageAlias(newest.id) : 'none' } });
   }
 }
@@ -1235,7 +1235,7 @@ Read
                                       the last days' finished work with why any didn't happen. Not in readonly mode
   accounts                           the chat accounts in Beeper, with the IDs start and group take
   mode [readonly | drafts]            show the mode, or make it stricter
-  triage [--days 14] [--max 100]      chats that want the Owner's attention: Beeper Companion's Catch up when it runs,
+  triage [--days 60] [--max 100]      chats that want the Owner's attention: Beeper Companion's Catch up when it runs,
                                       else ba's own ranking. --days, --max, or --all always rank on ba's own
   chat <chat> [--limit 20]            recent messages in one chat
   chat <chat> --around <message>      older messages around one, such as a search hit

@@ -3,7 +3,12 @@ import { participantsOf, participantTotal } from './beeper.mjs';
 import { looksLikeEmail, looksLikePhone, nameFor, normalizeEmail, normalizePhone } from './contacts.mjs';
 import { chatAlias, isDismissed, textHash } from './state.mjs';
 
-export const DEFAULT_WINDOW_DAYS = 14;
+// How far back the list looks: 60 days, so a debt older than two weeks still shows (Owner, 2026-10-20,
+// ADR 0279). It was 14 days until then.
+export const DEFAULT_WINDOW_DAYS = 60;
+// At most this many one-to-one Chats are read closely, newest first; the rest rank on their preview.
+// 400 covers a 60-day window on the busiest account we know of, which read 351 on 2026-10-20.
+export const MAX_INSPECTED = 400;
 const DAY = 86_400_000;
 
 export const isUnread = (c) => (c.unreadCount || 0) > 0 || c.isMarkedUnread === true;

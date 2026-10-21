@@ -4,7 +4,7 @@ import { groupRead, ownerNamesFrom, ownerNamesIn, repliesBeyond } from './addres
 import { participantTotal } from './beeper.mjs';
 import { strangerKey } from './history.mjs';
 import { rankRows } from './rank.mjs';
-import { DEFAULT_WINDOW_DAYS, applyContext, buildTriage, capTriage, dismissalHolds, filterTriage, groupCandidates, htmlToText, isUnread, previewKind, senderLabel, trailingInbound, wantsHistory } from './triage.mjs';
+import { DEFAULT_WINDOW_DAYS, MAX_INSPECTED, applyContext, buildTriage, capTriage, dismissalHolds, filterTriage, groupCandidates, htmlToText, isUnread, previewKind, senderLabel, trailingInbound, wantsHistory } from './triage.mjs';
 
 const DAY = 86_400_000;
 // At most this many read groups are read for whether they Addressed the Owner, newest first. Unread
@@ -65,8 +65,8 @@ export async function collectTriage(reads, { now = Date.now(), windowDays = DEFA
     hidden(r, 'senders', trailingInbound(g.messages).burst.slice(-6).map((m) => senderLabel(m, chat, contacts)));
     hidden(r, 'addressedBy', by ? senderLabel(by, chat, contacts) : null);
   }
-  // Look inside one-to-one Chats, eight at a time, at most 150, those that hold a Dropped item first.
-  const queue = [...t.people.filter((r) => r.held), ...t.people.filter((r) => !r.held)].filter(wantsHistory).slice(0, 150);
+  // Look inside one-to-one Chats, eight at a time, at most MAX_INSPECTED, those that hold a Dropped item first.
+  const queue = [...t.people.filter((r) => r.held), ...t.people.filter((r) => !r.held)].filter(wantsHistory).slice(0, MAX_INSPECTED);
   t.stats.notInspected = Math.max(0, t.people.filter(wantsHistory).length - queue.length);
   await Promise.all(Array.from({ length: 8 }, async () => {
     for (let r = queue.shift(); r && !(signal && signal.aborted); r = queue.shift()) {

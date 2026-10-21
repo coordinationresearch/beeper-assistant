@@ -19,11 +19,11 @@ test('the triage list carries the untrusted note and one line per chat', () => {
   assert.ok(out.includes(UNTRUSTED_NOTE));
   assert.match(out, /^c[0-9a-f]{8}  UNREAD 2 +Ann · TestNet · 1h  «dinner\?»$/m);
   assert.match(out, /^c[0-9a-f]{8}  READ +Ben · TestNet · 1h  «thursday at 6 works»$/m);
-  assert.ok(out.startsWith('TRIAGE · last 14 days · 2 people · 0 groups'));
+  assert.ok(out.startsWith('TRIAGE · last 60 days · 2 people · 0 groups'));
 });
 
 test('hidden chats are summarised, never silently dropped', () => {
-  const t = buildTriage([chat({ lastFrom: 'me' }), chat({ unread: 1, hoursAgo: 24 * 20 }), chat({ title: '24273', unread: 1, others: [person({ phone: '24273' })] })], { now: NOW, contacts });
+  const t = buildTriage([chat({ lastFrom: 'me' }), chat({ unread: 1, hoursAgo: 24 * 61 }), chat({ title: '24273', unread: 1, others: [person({ phone: '24273' })] })], { now: NOW, contacts });
   const out = renderTriage(t);
   assert.match(out, /Not shown: .*1 older than the window, 1 of them unread/);
   assert.match(out, /1 waiting on the other person/);
