@@ -59,6 +59,12 @@ Settled, the Chat is free. Answers are JSON: `{ "ok": true, "settled": "sent" }`
 
 Each answers JSON with `ok`, and a fixed `message` when it changed nothing. Do these when the Owner asks, or when what they asked plainly needs one, and say what you changed.
 
+## The Mind map
+
+`ba app mind start` turns the Mind map on and starts its build now, as the tab's Build my Mind map, Resume, and Try again buttons do. The first build spends about 3 million tokens of the agent's usage, once, so run it only when the Owner asks. A build that stopped goes on from its cache and pays for nothing twice.
+
+The tab's Edit on a card has its commands too, each naming an Area by its title as `ba mind` prints it. `ba app mind rename '<Area>' '<new title>'` renames it in the Owner's words. `ba app mind merge '<Area>' '<into Area>'` moves the first Area's lines and Interests into the second, and the first name goes. `ba app mind parts '<Area>'` lists what a split can move: its Interests and its own topics, with claims on each. `ba app mind split '<Area>' '<new Area title>' --interest '<Interest>' --topic '<topic>'` moves the Interests and topics named, each flag as often as needed, to a new Area. `ba app mind undo` puts back the map from before the last of them, when nothing has changed it since. Do these only when the Owner asks, and say what changed.
+
 ## Older history from a network's download
 
 Beeper keeps about 20 messages per LinkedIn Chat. LinkedIn's own data download holds the rest. `ba app history view` says what each network's download brought into the Message Corpus. When the Owner points at a download, run `ba app history import linkedin <absolute path>` with the `.zip` LinkedIn sent, the folder it unpacked to, or its `messages.csv`. It answers with how many messages came in, how many the Corpus already had, and the group conversations it held back. A LinkedIn file with no messages is the first of two parts; say the second usually follows within a day. `ba app history remove linkedin --confirmed` takes the imported history back out, only when the Owner asked.

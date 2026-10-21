@@ -435,8 +435,8 @@ function mindView(text, flags = {}) {
   const head = (first < 0 ? lines : lines.slice(0, first)).join('\n').trimEnd();
   const sections = [];
   for (const line of first < 0 ? [] : lines.slice(first)) {
-    // Headings read "## Talked about: <title> · …" since 2026-10-10, and "## <title> · …" before.
-    if (line.startsWith('## ')) sections.push({ heading: line, title: line.slice(3).split(' · ')[0].replace(/^Talked about: /, ''), meta: [], claims: [] });
+    // "## Talked about: <title> · …" since 2026-10-10, "## <title> · …" before; an Owner's title may hold " · " (ADR 0280).
+    if (line.startsWith('## ')) sections.push({ heading: line, title: line.slice(3).replace(/ · \d+% lately · .*$/, '').replace(/^Talked about: /, ''), meta: [], claims: [] });
     else if (line.startsWith('- ')) sections.at(-1).claims.push(line);
     else if (line.trim()) sections.at(-1).meta.push(line);
   }

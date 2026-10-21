@@ -128,3 +128,10 @@ test('--receipt refuses a message that is gone or retracted', () => {
     assert.match(r.stderr, /no longer has that message/);
   }
 });
+
+test('mind --area finds a title the Owner gave that holds " · " itself', () => {
+  const { dir, run } = setup();
+  const rule = 'What the Owner talks about, not where they work, what they belong to, or what they are.';
+  writeFileSync(join(dir, 'mind-map.md'), ['# Mind map', '', '## Talked about: Clay · Glaze · 100% lately · 1 claim', rule, '- 2026-09-01 · did · Mixed a new glaze · beeper:$g1', ''].join('\n'));
+  assert.match(run('--area', 'Clay · Glaze').stdout, /Mixed a new glaze/);
+});

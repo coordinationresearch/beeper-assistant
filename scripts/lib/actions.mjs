@@ -78,6 +78,22 @@ const situationWords = value => typeof value === 'string' && value.trim().length
 const MOVE = /^[1-9]\d?$/;
 const moveNumber = value => Number.isSafeInteger(value) && value >= 1 && value <= 99;
 const LESSON_ID = /^l[0-9a-f]{7}$/;
+// A Mind map card's or Interest's title as `ba mind` prints it, a new title, or a topic's name.
+const mindName = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 200 && !/[\x00-\x1f\x7f]/.test(value);
+const mindNames = value => Array.isArray(value) && value.length <= 100 && value.every(mindName);
+const mindTwo = (a, b) => (rest) => { if (rest.length !== 2 || !rest.every(mindName)) throw new Error('usage'); return { [a]: rest[0], [b]: rest[1] }; };
+// split's words: the card, the new Area's title, then --interest and --topic, each as often as needed.
+const mindSplit = (rest) => {
+  const [area, title, ...flags] = rest, body = { area, title, interests: [], topics: [] };
+  if (!mindName(area) || !mindName(title)) throw new Error('usage');
+  for (let i = 0; i < flags.length; i += 2) {
+    const list = flags[i] === '--interest' ? body.interests : flags[i] === '--topic' ? body.topics : null;
+    if (!list || !mindName(flags[i + 1])) throw new Error('usage');
+    list.push(flags[i + 1]);
+  }
+  if (!body.interests.length && !body.topics.length) throw new Error('usage');
+  return body;
+};
 const personBody = b => keys(b, ['personID']) && personID(b.personID);
 const incidentID = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value);
 const incidentSelection = value => {
@@ -146,8 +162,9 @@ export const ACTIONS = [
     parse: rest => { if (rest.length !== 4 || !exactChatID(rest[0]) || !actionID(rest[1]) || !['made', 'not-made'].includes(rest[2]) || rest[3] !== '--confirmed') throw Error('usage'); return { chatID: rest[0], id: rest[1], made: rest[2] === 'made', confirmed: true }; },
     check: body => keys(body, ['chatID', 'id', 'made', 'confirmed']) && exactChatID(body.chatID) && actionID(body.id) && typeof body.made === 'boolean' && body.confirmed === true,
     chats: body => [body.chatID] },
-  // Not now on an Intro card (the sidebar, ADR 0096): the card goes, and nothing is made. Its Send is
-  // `ba app intro make`, outside this table. Passing only stops, so a late run may.
+  // Not now on an Intro card (the sidebar, ADR 0096): the card goes, and nothing is made. On a made
+  // card it is the ×, which closes the card and leaves the Intro made. Its Send is `ba app intro make`,
+  // outside this table. Passing only stops, so a late run may.
   { name: 'intro pass', route: '/intro/pass', usage: 'ba app intro pass <introID> --confirmed', modes: both(NOT_READONLY), callers: OWNER, late: true,
     parse: rest => { if (rest.length !== 2 || !INTRO_ID.test(rest[0]) || rest[1] !== '--confirmed') throw Error('usage'); return { id: rest[0], confirmed: true }; },
     check: body => keys(body, ['id', 'confirmed']) && typeof body.id === 'string' && INTRO_ID.test(body.id) && body.confirmed === true,
@@ -456,6 +473,26 @@ export const ACTIONS = [
   { name: 'diagnostics off', route: '/diagnostics/off', usage: 'ba app diagnostics off', modes: both(NOT_READONLY), callers: OWNER, late: true,
     parse: none, check: empty, chats: () => [] },
   { name: 'diagnostics on', route: '/diagnostics/on', usage: 'ba app diagnostics on', modes: both(FULL), callers: OWNER, late: false,
+    parse: none, check: empty, chats: () => [] },
+  // The Mind map tab's start, as Build my Mind map, Resume, and Try again do: the map on and its build
+  // started now. The first build spends about 3M tokens of the agent's usage once (ADR 0061).
+  { name: 'mind start', route: '/mind/start', usage: 'ba app mind start', modes: both(NOT_READONLY), callers: OWNER, late: false,
+    parse: none, check: empty, chats: () => [] },
+  // The tab's rename, merge, and split of an Area (ADR 0280), naming each by its title as `ba mind` prints
+  // it. parts lists what a split can move: the Area's Interests and its own topics, with claims on each.
+  // A merge takes the first Area's lines and Interests into the second, and its name goes. undo puts back
+  // the map from before the last of them, when nothing has changed it since.
+  { name: 'mind parts', route: '/mind/parts', usage: "ba app mind parts '<Area>'", modes: both(ALL), callers: OWNER, late: true, read: true,
+    parse: (rest) => { if (rest.length !== 1 || !mindName(rest[0])) throw new Error('usage'); return { area: rest[0] }; },
+    check: (b) => keys(b, ['area']) && mindName(b.area), chats: () => [] },
+  { name: 'mind rename', route: '/mind/rename', usage: "ba app mind rename '<Area>' '<new title>'", modes: both(NOT_READONLY), callers: OWNER, late: false,
+    parse: mindTwo('area', 'title'), check: (b) => keys(b, ['area', 'title']) && mindName(b.area) && mindName(b.title), chats: () => [] },
+  { name: 'mind merge', route: '/mind/merge', usage: "ba app mind merge '<Area>' '<into Area>'", modes: both(NOT_READONLY), callers: OWNER, late: false,
+    parse: mindTwo('area', 'into'), check: (b) => keys(b, ['area', 'into']) && mindName(b.area) && mindName(b.into), chats: () => [] },
+  { name: 'mind split', route: '/mind/split', usage: "ba app mind split '<Area>' '<new Area title>' [--interest '<Interest>']... [--topic '<topic>']...", modes: both(NOT_READONLY), callers: OWNER, late: false,
+    parse: mindSplit, check: (b) => keys(b, ['area', 'title', 'interests', 'topics']) && mindName(b.area) && mindName(b.title) && mindNames(b.interests) && mindNames(b.topics)
+      && b.interests.length + b.topics.length > 0, chats: () => [] },
+  { name: 'mind undo', route: '/mind/undo', usage: 'ba app mind undo', modes: both(NOT_READONLY), callers: OWNER, late: false,
     parse: none, check: empty, chats: () => [] },
   // A network's own data download into the Message Corpus (docs/plans/history-import.md), as the
   // LinkedIn history row in Settings does: how each stands, a download to bring in (its .zip, the

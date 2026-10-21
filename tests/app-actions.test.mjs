@@ -298,3 +298,24 @@ test('the Model and Effort rows\' commands: the read runs anywhere, a choice onl
     else assert.deepEqual(app.requests.at(-1).body, appCommand(args).payload);
   }
 });
+
+test('the Mind map card commands name Areas by title: parts reads anywhere, a change needs a writing mode', async t => {
+  const plan = args => { const p = appCommand(args); return [p.command, p.path, p.payload]; };
+  assert.deepEqual(plan(['mind', 'parts', 'Pottery']), ['mind parts', '/mind/parts', { area: 'Pottery' }]);
+  assert.deepEqual(plan(['mind', 'rename', 'Pottery', 'The studio']), ['mind rename', '/mind/rename', { area: 'Pottery', title: 'The studio' }]);
+  assert.deepEqual(plan(['mind', 'merge', 'Chess', 'Pottery']), ['mind merge', '/mind/merge', { area: 'Chess', into: 'Pottery' }]);
+  assert.deepEqual(plan(['mind', 'split', 'Pottery', 'Glaze lab', '--interest', 'Wheel throwing', '--topic', 'glazes', '--topic', 'the kiln']),
+    ['mind split', '/mind/split', { area: 'Pottery', title: 'Glaze lab', interests: ['Wheel throwing'], topics: ['glazes', 'the kiln'] }]);
+  assert.deepEqual(plan(['mind', 'undo']), ['mind undo', '/mind/undo', {}]);
+  for (const args of [['mind', 'parts'], ['mind', 'rename', 'Pottery'], ['mind', 'merge', 'A', 'B', 'C'], ['mind', 'split', 'Pottery', 'Glaze lab'],
+    ['mind', 'split', 'Pottery', 'Glaze lab', '--topic'], ['mind', 'split', 'Pottery', 'Glaze lab', '--area', 'x'], ['mind', 'rename', 'Pottery', 'Two\nlines'], ['mind', 'undo', 'now']])
+    assert.throws(() => appCommand(args), /Usage:/, args.join(' '));
+  const app = await fakeApp(t);
+  for (const [args, mode, status] of [[['mind', 'parts', 'Pottery'], 'readonly', 0], [['mind', 'rename', 'Pottery', 'Clay'], 'readonly', 2], [['mind', 'merge', 'Chess', 'Pottery'], 'drafts', 0]]) {
+    app.requests.length = 0;
+    const r = await ba(envFor(app, { BEEPER_ASSISTANT_MODE: mode }), ['app', ...args]);
+    assert.equal(r.status, status, `${args.join(' ')} in ${mode}: ${r.stderr}`);
+    if (status) assert.deepEqual(app.requests, []);
+    else assert.deepEqual(app.requests.at(-1).body, appCommand(args).payload);
+  }
+});
